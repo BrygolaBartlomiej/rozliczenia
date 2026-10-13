@@ -5,8 +5,11 @@
   const STORAGE_KEY = 'rozliczenia.v1';
 
   // ---------- Dane startowe (z arkusza) ----------
+  const DEFAULT_RATE = 4.2; // ile zł za 1 € (1429 zł → 340,24 € w arkuszu)
+
   const SEED = {
     version: 1,
+    settings: { rate: DEFAULT_RATE },
     szef: [
       { id: 's1', type: 'wplata',  date: '2026-09-23', amount: 650, currency: 'EUR', note: 'Od szefa' },
       { id: 's2', type: 'wydatek', date: '2026-09-30', amount: 340, currency: 'EUR', note: 'Zakupy 1429 zł (598+264+290+68+66+97+46) ≈ 340 €' },
@@ -36,7 +39,10 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.szef) && Array.isArray(parsed.pati)) return parsed;
+        if (parsed && Array.isArray(parsed.szef) && Array.isArray(parsed.pati)) {
+          if (!parsed.settings || !(parsed.settings.rate > 0)) parsed.settings = { rate: DEFAULT_RATE };
+          return parsed;
+        }
       }
     } catch (e) { /* ignorujemy, zaczynamy od seeda */ }
     const copy = JSON.parse(JSON.stringify(SEED));
@@ -56,6 +62,9 @@
   const nf = new Intl.NumberFormat('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const money = (v, cur) => `${nf.format(v)} ${cur === 'PLN' ? 'zł' : '€'}`;
   const signed = (v, cur) => (v >= 0 ? '+' : '−') + money(Math.abs(v), cur);
+  const rate = () => (state.settings && state.settings.rate > 0 ? state.settings.rate : DEFAULT_RATE);
+  const plnToEur = (v) => v / rate();
+  const rateText = () => `1 € = ${nf.format(rate())} zł`;
   const MONTHS = ['sty', 'lut', 'mar', 'kwi', 'maj', 'cze', 'lip', 'sie', 'wrz', 'paź', 'lis', 'gru'];
   const MONTHS_FULL = ['Styczeń', 'Luty', 'Marzec', 'Kwiecień', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpień', 'Wrzesień', 'Październik', 'Listopad', 'Grudzień'];
 
@@ -136,6 +145,7 @@
     const s = saldoSzef(all);
     const eur = s.EUR.in - s.EUR.out;
     const pln = s.PLN.in - s.PLN.out;
+    const total = eur + plnToEur(pln);
     const filtered = sortDesc(applyFilter(all, 'szef'));
 
     let html = `
@@ -151,6 +161,13 @@
           <div class="sub">dostałem ${money(s.PLN.in, 'PLN')}<br>wydałem ${money(s.PLN.out, 'PLN')}</div>
         </div>
       </div>
+      <div class="cards single">
+        <button class="card card-btn" data-action="rate">
+          <div class="label">Razem w € <span class="muted">(${money(pln, 'PLN')} ≈ ${money(plnToEur(pln), 'EUR')})</span></div>
+          <div class="value ${total < 0 ? 'neg' : ''}">${money(total, 'EUR')}</div>
+          <div class="sub">kurs ${rateText()} · dotknij, żeby zmienić</div>
+        </button>
+      </div>
       ${chipsHTML(all, 'szef')}
     `;
 
@@ -162,7 +179,7 @@
         return `<button class="item" data-edit="szef" data-id="${esc(e.id)}">
           <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
           <div class="note">${esc(e.note) || (plus ? 'Dostałem' : 'Wydatek')}<small>${plus ? 'dostałem' : 'wydałem'}</small></div>
-          <div class="amt ${plus ? 'plus' : 'minus'}">${signed(plus ? e.amount : -e.amount, e.currency)}</div>
+          <div class="amt ${plus ? 'plus' : 'minus'}">${signed(plus ? e.amount : -e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>
         </button>`;
       });
     }
@@ -222,6 +239,16 @@
     $title.textContent = 'Więcej';
     const canShare = !!navigator.share;
     $view.innerHTML = `
+      <div class="section-title"><span>Ustawienia</span></div>
+      <div class="list">
+        <label class="item setting">
+          <div class="note">Kurs euro<small>ile złotych za 1 €</small></div>
+          <input type="number" id="rate-input" inputmode="decimal" step="0.01" min="0.01" value="${rate()}">
+          <span class="muted">zł</span>
+        </label>
+      </div>
+      <p class="hint">Po tym kursie przeliczane są złotówki na euro w karcie „Razem w €” i w podsumowaniu.</p>
+
       <div class="section-title"><span>Podsumowanie</span></div>
       <pre class="summary">${esc(summaryText())}</pre>
       <div class="menu">
@@ -251,7 +278,10 @@
     lines.push('');
     lines.push(`Dostałem:  ${money(s.EUR.in, 'EUR')}  |  ${money(s.PLN.in, 'PLN')}`);
     lines.push(`Wydałem:   ${money(s.EUR.out, 'EUR')}  |  ${money(s.PLN.out, 'PLN')}`);
-    lines.push(`ZOSTAŁO:   ${money(s.EUR.in - s.EUR.out, 'EUR')}  |  ${money(s.PLN.in - s.PLN.out, 'PLN')}`);
+    const eur = s.EUR.in - s.EUR.out;
+    const pln = s.PLN.in - s.PLN.out;
+    lines.push(`ZOSTAŁO:   ${money(eur, 'EUR')}  |  ${money(pln, 'PLN')}`);
+    lines.push(`Razem ≈ ${money(eur + plnToEur(pln), 'EUR')}  (kurs ${rateText()})`);
     lines.push('');
     lines.push('Wpisy:');
     for (const e of sortDesc(state.szef).reverse()) {
@@ -395,8 +425,26 @@
     if (act) handleAction(act.dataset.action);
   });
 
+  // zmiana kursu w ustawieniach
+  $view.addEventListener('change', (ev) => {
+    if (ev.target.id !== 'rate-input') return;
+    const v = parseFloat(String(ev.target.value).replace(',', '.'));
+    if (!(v > 0)) { ev.target.value = rate(); toast('Podaj kurs większy od zera'); return; }
+    state.settings = { ...(state.settings || {}), rate: Math.round(v * 10000) / 10000 };
+    save(); render();
+    toast(`Kurs: ${rateText()}`);
+  });
+
   async function handleAction(action) {
-    if (action === 'copy') {
+    if (action === 'rate') {
+      const v = prompt('Kurs euro – ile złotych za 1 €?', String(rate()).replace('.', ','));
+      if (v === null) return;
+      const n = parseFloat(String(v).replace(',', '.'));
+      if (!(n > 0)) { toast('Podaj kurs większy od zera'); return; }
+      state.settings = { ...(state.settings || {}), rate: Math.round(n * 10000) / 10000 };
+      save(); render();
+      toast(`Kurs: ${rateText()}`);
+    } else if (action === 'copy') {
       try {
         await navigator.clipboard.writeText(summaryText());
         toast('Skopiowano do schowka');
@@ -414,7 +462,7 @@
     } else if (action === 'reset') {
       if (!confirm('Na pewno usunąć WSZYSTKIE dane? Tej operacji nie da się cofnąć.')) return;
       if (!confirm('Ostatni raz: usunąć wszystko?')) return;
-      state = { version: 1, szef: [], pati: [] };
+      state = { version: 1, settings: { rate: rate() }, szef: [], pati: [] };
       save(); render();
       toast('Dane wyczyszczone');
     }
@@ -440,7 +488,8 @@
       const parsed = JSON.parse(await file.text());
       if (!parsed || !Array.isArray(parsed.szef) || !Array.isArray(parsed.pati)) throw new Error('zły format');
       if (!confirm(`Wczytać ${parsed.szef.length} wpisów rozliczeń i ${parsed.pati.length} wpisów Pati? Obecne dane zostaną zastąpione.`)) return;
-      state = { version: 1, szef: parsed.szef, pati: parsed.pati };
+      const r = parsed.settings && parsed.settings.rate > 0 ? parsed.settings.rate : rate();
+      state = { version: 1, settings: { rate: r }, szef: parsed.szef, pati: parsed.pati };
       save(); render();
       toast('Dane wczytane');
     } catch (e) {
