@@ -28,6 +28,9 @@
     <button class="tab active" data-tab="szef">
       <span class="tab-icon">💶</span><span>Szef</span>
     </button>
+    <button class="tab" data-tab="wyplata">
+      <span class="tab-icon">💰</span><span>Wypłata</span>
+    </button>
     <button class="tab" data-tab="pati">
       <span class="tab-icon">👩‍🔧</span><span>Pati</span>
     </button>
@@ -68,6 +71,41 @@
       </label>
       <div class="actions">
         <button type="button" class="btn danger" id="btn-szef-delete" hidden>Usuń</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Anuluj</button>
+        <button type="submit" class="btn primary">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Formularz: Wypłata -->
+  <dialog id="dlg-wyplata">
+    <form method="dialog" id="form-wyplata">
+      <h2 id="dlg-wyplata-title">Nowa wypłata</h2>
+      <input type="hidden" name="id">
+      <label class="field">
+        <span>Data</span>
+        <input type="date" name="date" required>
+      </label>
+      <div class="row">
+        <label class="field grow">
+          <span>Kwota</span>
+          <input type="number" name="amount" inputmode="decimal" step="0.01" min="0" placeholder="0,00" required>
+        </label>
+        <label class="field">
+          <span>Waluta</span>
+          <select name="currency">
+            <option value="EUR">€</option>
+            <option value="PLN">zł</option>
+          </select>
+        </label>
+      </div>
+      <label class="field">
+        <span>Za co / opis</span>
+        <input type="text" name="note" placeholder="np. wypłata za wrzesień, premia, zaliczka…" autocomplete="off">
+      </label>
+      <div class="actions">
+        <button type="button" class="btn danger" id="btn-wyplata-delete" hidden>Usuń</button>
         <span class="grow"></span>
         <button type="button" class="btn" data-close>Anuluj</button>
         <button type="submit" class="btn primary">Zapisz</button>

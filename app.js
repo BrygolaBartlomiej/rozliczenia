@@ -19,6 +19,7 @@
       { id: 's6', type: 'wplata',  date: '2026-10-13', amount: 100, currency: 'EUR', note: 'Od szefa' },
       { id: 's7', type: 'wydatek', date: '2026-10-13', amount: 100, currency: 'EUR', note: 'DO SPRAWDZENIA – wg arkusza zostało 40 €' },
     ],
+    wyplata: [],
     pati: [
       { id: 'p1', type: 'praca',   date: '2026-08-12', amount: 100, note: '' },
       { id: 'p2', type: 'praca',   date: '2026-08-26', amount: 200, note: '' },
@@ -32,7 +33,7 @@
   // ---------- Stan ----------
   let state = load();
   let tab = 'szef';
-  let monthFilter = { szef: 'all', pati: 'all' };
+  let monthFilter = { szef: 'all', wyplata: 'all', pati: 'all' };
 
   function load() {
     try {
@@ -41,6 +42,7 @@
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.szef) && Array.isArray(parsed.pati)) {
           if (!parsed.settings || !(parsed.settings.rate > 0)) parsed.settings = { rate: DEFAULT_RATE };
+          if (!Array.isArray(parsed.wyplata)) parsed.wyplata = [];
           return parsed;
         }
       }
@@ -102,6 +104,11 @@
     }
     return r;
   }
+  function sumWyplaty(list) {
+    const r = { EUR: 0, PLN: 0 };
+    for (const e of list) r[e.currency] = (r[e.currency] || 0) + +e.amount;
+    return r;
+  }
   function saldoPati(list) {
     let earned = 0, paid = 0;
     for (const e of list) {
@@ -119,6 +126,7 @@
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     $fab.hidden = tab === 'wiecej';
     if (tab === 'szef') renderSzef();
+    else if (tab === 'wyplata') renderWyplata();
     else if (tab === 'pati') renderPati();
     else renderWiecej();
     $view.scrollTop = 0;
@@ -182,6 +190,49 @@
           <div class="amt ${plus ? 'plus' : 'minus'}">${signed(plus ? e.amount : -e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>
         </button>`;
       });
+    }
+    $view.innerHTML = html;
+  }
+
+  function renderWyplata() {
+    $title.textContent = 'Wypłata';
+    const all = state.wyplata;
+    const total = sumWyplaty(all);
+    const filtered = sortDesc(applyFilter(all, 'wyplata'));
+    const shown = sumWyplaty(filtered);
+    const m = monthFilter.wyplata;
+    const label = m === 'all' ? 'Razem wypłacone' : `Wypłacone: ${monthLabelFull(m).toLowerCase()}`;
+    const totalEur = shown.EUR + plnToEur(shown.PLN);
+
+    let html = `
+      <div class="cards">
+        <div class="card">
+          <div class="label">${label} €</div>
+          <div class="value">${money(shown.EUR, 'EUR')}</div>
+        </div>
+        <div class="card">
+          <div class="label">${label} zł</div>
+          <div class="value">${money(shown.PLN, 'PLN')}</div>
+        </div>
+      </div>
+      <div class="cards single">
+        <div class="card">
+          <div class="label">Razem w € <span class="muted">(kurs ${rateText()})</span></div>
+          <div class="value">${money(totalEur, 'EUR')}</div>
+          ${m !== 'all' ? `<div class="sub">łącznie od początku: ${money(total.EUR, 'EUR')} + ${money(total.PLN, 'PLN')}</div>` : `<div class="sub">wypłat: ${all.length}</div>`}
+        </div>
+      </div>
+      ${chipsHTML(all, 'wyplata')}
+    `;
+
+    if (!filtered.length) {
+      html += `<div class="empty">Brak wypłat.<br>Dotknij <b>+</b>, żeby dodać wypłatę od szefa i wpisać, za co.</div>`;
+    } else {
+      html += listByMonthHTML(filtered, (e) => `<button class="item" data-edit="wyplata" data-id="${esc(e.id)}">
+          <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
+          <div class="note">${esc(e.note) || 'Wypłata'}<small>wypłata</small></div>
+          <div class="amt plus">+${money(e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>
+        </button>`);
     }
     $view.innerHTML = html;
   }
@@ -289,6 +340,17 @@
       lines.push(`${fmtDate(e.date)}  ${sign}${money(e.amount, e.currency)}${e.note ? '  ' + e.note : ''}`);
     }
     lines.push('');
+    lines.push('WYPŁATY');
+    if (state.wyplata.length) {
+      const w = sumWyplaty(state.wyplata);
+      lines.push(`Razem: ${money(w.EUR, 'EUR')}  |  ${money(w.PLN, 'PLN')}`);
+      for (const e of sortDesc(state.wyplata).reverse()) {
+        lines.push(`${fmtDate(e.date)}  ${money(e.amount, e.currency)}${e.note ? '  ' + e.note : ''}`);
+      }
+    } else {
+      lines.push('(brak)');
+    }
+    lines.push('');
     lines.push('PATI U SVENA');
     lines.push(`Zarobione: ${money(p.earned, 'EUR')}, zapłacone: ${money(p.paid, 'EUR')}, do zapłaty: ${money(p.due, 'EUR')}`);
     for (const e of sortDesc(state.pati).reverse()) {
@@ -310,6 +372,8 @@
   // ---------- Dialogi ----------
   const dlgSzef = document.getElementById('dlg-szef');
   const formSzef = document.getElementById('form-szef');
+  const dlgWyplata = document.getElementById('dlg-wyplata');
+  const formWyplata = document.getElementById('form-wyplata');
   const dlgPati = document.getElementById('dlg-pati');
   const formPati = document.getElementById('form-pati');
 
@@ -325,6 +389,19 @@
     document.getElementById('btn-szef-delete').hidden = !entry;
     dlgSzef.showModal();
     if (!entry) setTimeout(() => formSzef.amount.focus(), 50);
+  }
+
+  function openWyplata(entry) {
+    formWyplata.reset();
+    formWyplata.id.value = entry ? entry.id : '';
+    formWyplata.date.value = entry ? entry.date : todayISO();
+    formWyplata.amount.value = entry ? entry.amount : '';
+    formWyplata.currency.value = entry ? entry.currency : 'EUR';
+    formWyplata.note.value = entry ? entry.note : '';
+    document.getElementById('dlg-wyplata-title').textContent = entry ? 'Edytuj wypłatę' : 'Nowa wypłata';
+    document.getElementById('btn-wyplata-delete').hidden = !entry;
+    dlgWyplata.showModal();
+    if (!entry) setTimeout(() => formWyplata.amount.focus(), 50);
   }
 
   function openPati(entry) {
@@ -356,6 +433,22 @@
     toast('Zapisano');
   });
 
+  formWyplata.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const amount = parseFloat(String(formWyplata.amount.value).replace(',', '.'));
+    if (!(amount >= 0)) return;
+    const entry = {
+      id: formWyplata.id.value || uid(),
+      date: formWyplata.date.value,
+      amount: Math.round(amount * 100) / 100,
+      currency: formWyplata.currency.value,
+      note: formWyplata.note.value.trim(),
+    };
+    upsert(state.wyplata, entry);
+    save(); dlgWyplata.close(); render();
+    toast('Zapisano');
+  });
+
   formPati.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const amount = parseFloat(String(formPati.amount.value).replace(',', '.'));
@@ -378,6 +471,12 @@
     save(); dlgSzef.close(); render();
     toast('Usunięto');
   });
+  document.getElementById('btn-wyplata-delete').addEventListener('click', () => {
+    if (!confirm('Usunąć tę wypłatę?')) return;
+    state.wyplata = state.wyplata.filter((e) => e.id !== formWyplata.id.value);
+    save(); dlgWyplata.close(); render();
+    toast('Usunięto');
+  });
   document.getElementById('btn-pati-delete').addEventListener('click', () => {
     if (!confirm('Usunąć ten wpis?')) return;
     state.pati = state.pati.filter((e) => e.id !== formPati.id.value);
@@ -389,7 +488,7 @@
     b.addEventListener('click', () => b.closest('dialog').close());
   });
   // zamykanie po kliknięciu w tło
-  [dlgSzef, dlgPati].forEach((d) => {
+  [dlgSzef, dlgWyplata, dlgPati].forEach((d) => {
     d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
   });
 
@@ -405,6 +504,7 @@
 
   $fab.addEventListener('click', () => {
     if (tab === 'szef') openSzef(null);
+    else if (tab === 'wyplata') openWyplata(null);
     else if (tab === 'pati') openPati(null);
   });
 
@@ -417,7 +517,9 @@
       const which = item.dataset.edit;
       const entry = state[which].find((e) => e.id === item.dataset.id);
       if (!entry) return;
-      if (which === 'szef') openSzef(entry); else openPati(entry);
+      if (which === 'szef') openSzef(entry);
+      else if (which === 'wyplata') openWyplata(entry);
+      else openPati(entry);
       return;
     }
 
@@ -462,7 +564,7 @@
     } else if (action === 'reset') {
       if (!confirm('Na pewno usunąć WSZYSTKIE dane? Tej operacji nie da się cofnąć.')) return;
       if (!confirm('Ostatni raz: usunąć wszystko?')) return;
-      state = { version: 1, settings: { rate: rate() }, szef: [], pati: [] };
+      state = { version: 1, settings: { rate: rate() }, szef: [], wyplata: [], pati: [] };
       save(); render();
       toast('Dane wyczyszczone');
     }
@@ -487,9 +589,10 @@
     try {
       const parsed = JSON.parse(await file.text());
       if (!parsed || !Array.isArray(parsed.szef) || !Array.isArray(parsed.pati)) throw new Error('zły format');
-      if (!confirm(`Wczytać ${parsed.szef.length} wpisów rozliczeń i ${parsed.pati.length} wpisów Pati? Obecne dane zostaną zastąpione.`)) return;
+      const wyplata = Array.isArray(parsed.wyplata) ? parsed.wyplata : [];
+      if (!confirm(`Wczytać ${parsed.szef.length} wpisów rozliczeń, ${wyplata.length} wypłat i ${parsed.pati.length} wpisów Pati? Obecne dane zostaną zastąpione.`)) return;
       const r = parsed.settings && parsed.settings.rate > 0 ? parsed.settings.rate : rate();
-      state = { version: 1, settings: { rate: r }, szef: parsed.szef, pati: parsed.pati };
+      state = { version: 1, settings: { rate: r }, szef: parsed.szef, wyplata, pati: parsed.pati };
       save(); render();
       toast('Dane wczytane');
     } catch (e) {
