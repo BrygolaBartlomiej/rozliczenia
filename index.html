@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <title>Rozliczenia</title>
+  <meta name="description" content="Rozliczenia z szefem i praca Pati u Svena">
+  <meta name="theme-color" content="#1b5e3f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Rozliczenia">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">Rozliczenia</h1>
+  </header>
+
+  <main id="view"></main>
+
+  <button id="fab" class="fab" aria-label="Dodaj">+</button>
+
+  <nav class="tabbar">
+    <button class="tab active" data-tab="szef">
+      <span class="tab-icon">💶</span><span>Szef</span>
+    </button>
+    <button class="tab" data-tab="pati">
+      <span class="tab-icon">👩‍🔧</span><span>Pati</span>
+    </button>
+    <button class="tab" data-tab="wiecej">
+      <span class="tab-icon">⋯</span><span>Więcej</span>
+    </button>
+  </nav>
+
+  <!-- Formularz: szef -->
+  <dialog id="dlg-szef">
+    <form method="dialog" id="form-szef">
+      <h2 id="dlg-szef-title">Nowy wpis</h2>
+      <input type="hidden" name="id">
+      <div class="seg" role="radiogroup">
+        <label><input type="radio" name="type" value="wydatek" checked><span>Wydałem</span></label>
+        <label><input type="radio" name="type" value="wplata"><span>Dostałem</span></label>
+      </div>
+      <label class="field">
+        <span>Data</span>
+        <input type="date" name="date" required>
+      </label>
+      <div class="row">
+        <label class="field grow">
+          <span>Kwota</span>
+          <input type="number" name="amount" inputmode="decimal" step="0.01" min="0" placeholder="0,00" required>
+        </label>
+        <label class="field">
+          <span>Waluta</span>
+          <select name="currency">
+            <option value="EUR">€</option>
+            <option value="PLN">zł</option>
+          </select>
+        </label>
+      </div>
+      <label class="field">
+        <span>Na co / uwagi</span>
+        <input type="text" name="note" placeholder="np. paliwo, materiały…" autocomplete="off">
+      </label>
+      <div class="actions">
+        <button type="button" class="btn danger" id="btn-szef-delete" hidden>Usuń</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Anuluj</button>
+        <button type="submit" class="btn primary">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Formularz: Pati -->
+  <dialog id="dlg-pati">
+    <form method="dialog" id="form-pati">
+      <h2 id="dlg-pati-title">Nowy wpis</h2>
+      <input type="hidden" name="id">
+      <div class="seg" role="radiogroup">
+        <label><input type="radio" name="type" value="praca" checked><span>Praca u Svena</span></label>
+        <label><input type="radio" name="type" value="wyplata"><span>Sven zapłacił</span></label>
+      </div>
+      <label class="field">
+        <span>Data</span>
+        <input type="date" name="date" required>
+      </label>
+      <label class="field">
+        <span>Kwota (€)</span>
+        <input type="number" name="amount" inputmode="decimal" step="0.01" min="0" placeholder="100" required>
+      </label>
+      <label class="field">
+        <span>Uwagi</span>
+        <input type="text" name="note" placeholder="opcjonalnie" autocomplete="off">
+      </label>
+      <div class="actions">
+        <button type="button" class="btn danger" id="btn-pati-delete" hidden>Usuń</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Anuluj</button>
+        <button type="submit" class="btn primary">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="file-import" accept="application/json,.json" hidden>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
