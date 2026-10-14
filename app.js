@@ -406,6 +406,12 @@
         ${canShare ? `<button class="btn block" data-action="share"><span>Wyślij podsumowanie…</span><span>📤</span></button>` : ''}
       </div>
 
+      <div class="section-title"><span>Aktualizacja</span></div>
+      <p class="hint">Jeśli na ekranie Kasa nadal widać osobno „Zostało €” i „Zostało zł”, telefon trzyma starą wersję.</p>
+      <div class="menu">
+        <button class="btn block" data-action="reload"><span>Pobierz nową wersję</span><span>🔄</span></button>
+      </div>
+
       <div class="section-title"><span>Kopia zapasowa</span></div>
       <p class="hint">Dane są zapisane tylko na tym telefonie. Co jakiś czas zrób eksport i zapisz plik np. w iCloud / Plikach.</p>
       <div class="menu">
@@ -676,6 +682,14 @@
       exportJSON();
     } else if (action === 'import') {
       document.getElementById('file-import').click();
+    } else if (action === 'reload') {
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      } catch (e) { /* iOS czasem rzuca – i tak przeładowujemy */ }
+      location.reload();
     } else if (action === 'reset') {
       if (!confirm('Na pewno usunąć WSZYSTKIE dane? Tej operacji nie da się cofnąć.')) return;
       if (!confirm('Ostatni raz: usunąć wszystko?')) return;
@@ -715,8 +729,17 @@
 
   // ---------- Service worker ----------
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      location.reload();
+    });
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      navigator.serviceWorker.register('sw.js').then((reg) => {
+        reg.update().catch(() => {});
+        if (reg.waiting) reg.waiting.postMessage('skipWaiting');
+      }).catch(() => {});
     });
   }
 

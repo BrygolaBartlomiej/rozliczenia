@@ -1,9 +1,9 @@
-const CACHE = 'rozliczenia-v7';
+const CACHE = 'rozliczenia-v8';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css',
-  './app.js',
+  './styles.css?v=8',
+  './app.js?v=8',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/apple-touch-icon.png',
@@ -23,11 +23,16 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Najpierw sieć (żeby łapać aktualizacje), gdy brak internetu – cache.
+self.addEventListener('message', (e) => {
+  if (e.data === 'skipWaiting') self.skipWaiting();
+});
+
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  const isDoc = e.request.mode === 'navigate' || /\/$|\.html$/.test(url.pathname);
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, isDoc ? { cache: 'no-store' } : undefined)
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
