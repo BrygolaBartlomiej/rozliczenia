@@ -326,6 +326,7 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
 
 .seg.cats span { font-size: 14px; padding: 8px 4px; }
 form.is-in .only-out { display: none; }
+form.is-out .only-in { display: none; }
 
 .check {
   display: flex;

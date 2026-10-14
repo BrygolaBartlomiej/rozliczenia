@@ -1,22 +1,25 @@
 /* Rozliczenia – prosta PWA, dane trzymane w localStorage telefonu.
  *
- * Model (wersja 2):
- *   ruchy: [{ id, date, amount, currency, kind: 'in' | 'out', cat: 'wydatek'|'wyplata'|'pati'|null, note, poza }]
- *     kind 'in'  = pieniądze od szefa (jedna pula)
- *     kind 'out' = na co poszły (kategoria), poza=true → nie z kasy szefa (nie odejmuje od salda)
+ * Model (wersja 3):
+ *   ruchy: [{ id, date, amount, currency, kind: 'in' | 'out', cel, note, poza }]
+ *     kind 'in'  = szef dał pieniądze; cel mówi, co to było:
+ *                  'wydatki' (kasa na wydatki) | 'wyplata' (moja wypłata) | 'pati' (dla Pati)
+ *     kind 'out' = wydatek z kasy na wydatki; poza=true → zapłacone ze swojego (nie odejmuje)
  *   praca: [{ id, date, amount, note }]  – dni pracy Pati u Svena (zarobione €)
+ *
+ *   Zostało (Kasa) = suma in/wydatki − suma out (bez poza)
  */
 (() => {
   'use strict';
 
   const STORAGE_KEY = 'rozliczenia.v1';
-  const VERSION = 2;
+  const VERSION = 3;
   const DEFAULT_RATE = 4.2; // ile zł za 1 € (1429 zł → 340,24 € w arkuszu)
 
-  const CATS = {
-    wydatek: { label: 'Wydatki', one: 'Wydatek', icon: '🧾' },
-    wyplata: { label: 'Wypłata', one: 'Wypłata', icon: '💰' },
-    pati:    { label: 'Pati',    one: 'Dla Pati', icon: '👩‍🔧' },
+  const CEL = {
+    wydatki: { label: 'na wydatki' },
+    wyplata: { label: 'moja wypłata' },
+    pati:    { label: 'dla Pati' },
   };
 
   // ---------- Dane startowe (z arkusza) ----------
@@ -24,14 +27,13 @@
     version: VERSION,
     settings: { rate: DEFAULT_RATE },
     ruchy: [
-      { id: 's1', kind: 'in',  date: '2026-09-23', amount: 650, currency: 'EUR', cat: null, note: '' },
-      { id: 's2', kind: 'out', date: '2026-09-30', amount: 340, currency: 'EUR', cat: 'wydatek', note: 'Zakupy 1429 zł (598+264+290+68+66+97+46) ≈ 340 €' },
-      { id: 's3', kind: 'out', date: '2026-09-30', amount: 270, currency: 'EUR', cat: 'wydatek', note: 'Pozostałe wydatki do 01.10' },
-      { id: 's4', kind: 'out', date: '2026-10-12', amount: 285, currency: 'PLN', cat: 'wydatek', note: '' },
-      { id: 's5', kind: 'in',  date: '2026-10-13', amount: 300, currency: 'PLN', cat: null, note: '' },
-      { id: 's6', kind: 'in',  date: '2026-10-13', amount: 100, currency: 'EUR', cat: null, note: '' },
-      { id: 's7', kind: 'out', date: '2026-10-13', amount: 100, currency: 'EUR', cat: 'pati', note: 'Wypłata dla Pati' },
-      { id: 'p3', kind: 'out', date: '2026-09-01', amount: 100, currency: 'EUR', cat: 'pati', note: 'Wypłata dla Pati (przed 23.09 – sprawdź)', poza: true },
+      { id: 's1', kind: 'in',  cel: 'wydatki', date: '2026-09-23', amount: 650, currency: 'EUR', note: '' },
+      { id: 's2', kind: 'out', date: '2026-09-30', amount: 340, currency: 'EUR', note: 'Zakupy 1429 zł (598+264+290+68+66+97+46) ≈ 340 €' },
+      { id: 's3', kind: 'out', date: '2026-09-30', amount: 270, currency: 'EUR', note: 'Pozostałe wydatki do 01.10' },
+      { id: 's4', kind: 'out', date: '2026-10-12', amount: 285, currency: 'PLN', note: '' },
+      { id: 's5', kind: 'in',  cel: 'wydatki', date: '2026-10-13', amount: 300, currency: 'PLN', note: '' },
+      { id: 's6', kind: 'in',  cel: 'pati',    date: '2026-10-13', amount: 100, currency: 'EUR', note: '' },
+      { id: 'p3', kind: 'in',  cel: 'pati',    date: '2026-09-01', amount: 100, currency: 'EUR', note: '' },
     ],
     praca: [
       { id: 'p1', date: '2026-08-12', amount: 100, note: '' },
@@ -45,14 +47,12 @@
   let state = load();
   let tab = 'kasa';
   let monthFilter = { kasa: 'all', wyplata: 'all', pati: 'all' };
-  let catFilter = 'all'; // kasa: all | in | wydatek | wyplata | pati
 
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw);
-        const migrated = migrate(parsed);
+        const migrated = migrate(JSON.parse(raw));
         if (migrated) { save(migrated); return migrated; }
       }
     } catch (e) { /* ignorujemy, zaczynamy od seeda */ }
@@ -61,51 +61,74 @@
     return copy;
   }
 
-  // Migracja ze starego modelu (szef / wyplata / pati) do nowego (ruchy / praca).
+  // ---------- Migracje ----------
   function migrate(p) {
     if (!p || typeof p !== 'object') return null;
-    const rate = p.settings && p.settings.rate > 0 ? p.settings.rate : DEFAULT_RATE;
+    const rateVal = p.settings && p.settings.rate > 0 ? p.settings.rate : DEFAULT_RATE;
 
-    if (Array.isArray(p.ruchy) && Array.isArray(p.praca)) {
-      p.version = VERSION;
-      p.settings = { rate };
+    // v3 – aktualny
+    if (Array.isArray(p.ruchy) && Array.isArray(p.praca) && p.version >= 3) {
+      p.settings = { rate: rateVal };
       return p;
     }
-    if (!Array.isArray(p.szef) || !Array.isArray(p.pati)) return null;
+    // v2 (ruchy z kategoriami rozchodów) → v3
+    if (Array.isArray(p.ruchy) && Array.isArray(p.praca)) {
+      return { version: VERSION, settings: { rate: rateVal }, ruchy: v2ToV3(p.ruchy), praca: p.praca };
+    }
+    // v1 (szef / wyplata / pati) → v2 → v3
+    if (Array.isArray(p.szef) && Array.isArray(p.pati)) {
+      const v2 = v1ToV2(p);
+      return { version: VERSION, settings: { rate: rateVal }, ruchy: v2ToV3(v2.ruchy), praca: v2.praca };
+    }
+    return null;
+  }
 
+  function v1ToV2(p) {
     const ruchy = [];
     const praca = [];
-    let hadS7 = false;
-
     for (const e of p.szef) {
-      if (e.type === 'wplata') {
-        ruchy.push({ id: e.id, kind: 'in', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: null, note: e.note === 'Od szefa' ? '' : (e.note || '') });
-      } else if (e.id === 's7' && /DO SPRAWDZENIA/.test(e.note || '')) {
-        // niewyjaśnione 100 € z 13.10 = wypłata dla Pati tego samego dnia
-        hadS7 = true;
-        ruchy.push({ id: 's7', kind: 'out', date: e.date, amount: +e.amount, currency: 'EUR', cat: 'pati', note: 'Wypłata dla Pati' });
-      } else {
-        ruchy.push({ id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: 'wydatek', note: e.note || '' });
-      }
+      if (e.type === 'wplata') ruchy.push({ id: e.id, kind: 'in', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: null, note: e.note === 'Od szefa' ? '' : (e.note || '') });
+      else ruchy.push({ id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: 'wydatek', note: e.note || '' });
     }
     for (const e of (Array.isArray(p.wyplata) ? p.wyplata : [])) {
       ruchy.push({ id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: 'wyplata', note: e.note || '' });
     }
-    const firstIn = ruchy.filter((r) => r.kind === 'in').map((r) => r.date).sort()[0];
     for (const e of p.pati) {
-      if (e.type === 'praca') {
-        praca.push({ id: e.id, date: e.date, amount: +e.amount, note: e.note || '' });
+      if (e.type === 'praca') praca.push({ id: e.id, date: e.date, amount: +e.amount, note: e.note || '' });
+      else ruchy.push({ id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: 'EUR', cat: 'pati', note: e.note || '' });
+    }
+    return { ruchy, praca };
+  }
+
+  // W v2 wypłata / Pati były ROZCHODAMI z puli, więc użytkownik często wpisywał dwa razy:
+  // „Dostałem 700 €” + „Wypłata 700 €”. Teraz to jeden wpis „Dostałem 700 € – moja wypłata”.
+  // Scalamy: dla każdego rozchodu wypłata/Pati szukamy wpłaty o tej samej kwocie i walucie
+  // w odległości do 7 dni i ją usuwamy.
+  function v2ToV3(ruchy) {
+    const ins = ruchy.filter((e) => e.kind === 'in').map((e) => ({ ...e, _used: false }));
+    const out = [];
+    const dayDiff = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
+    const cleanNote = (n) => (n || '').replace(/^Wypłata dla Pati(\s*\(.*\))?$/i, '').replace(/^DO SPRAWDZENIA.*$/i, '').trim();
+
+    for (const e of ruchy) {
+      if (e.kind === 'in') continue;
+      if (e.cat === 'wyplata' || e.cat === 'pati') {
+        const match = ins
+          .filter((i) => !i._used && i.currency === (e.currency || 'EUR') && +i.amount === +e.amount && dayDiff(i.date, e.date) <= 7)
+          .sort((a, b) => dayDiff(a.date, e.date) - dayDiff(b.date, e.date))[0];
+        if (match) match._used = true;
+        out.push({ id: e.id, kind: 'in', cel: e.cat, date: e.date, amount: +e.amount, currency: e.currency || 'EUR', note: cleanNote(e.note) || (match && match.note) || '' });
       } else {
-        if (hadS7 && e.id === 'p6') continue; // już scalone z s7
-        const poza = !!firstIn && e.date < firstIn; // wypłata zanim była jakakolwiek kasa od szefa
-        ruchy.push({
-          id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: 'EUR', cat: 'pati',
-          note: e.note || (poza ? `Wypłata dla Pati (przed ${fmtDate(firstIn)} – sprawdź)` : 'Wypłata dla Pati'),
-          poza,
-        });
+        const o = { id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', note: e.note || '' };
+        if (e.poza) o.poza = true;
+        out.push(o);
       }
     }
-    return { version: VERSION, settings: { rate }, ruchy, praca };
+    for (const i of ins) {
+      if (i._used) continue;
+      out.push({ id: i.id, kind: 'in', cel: i.cel || 'wydatki', date: i.date, amount: +i.amount, currency: i.currency || 'EUR', note: i.note === 'Od szefa' ? '' : (i.note || '') });
+    }
+    return out;
   }
 
   function save(s = state) {
@@ -145,26 +168,26 @@
     return [...list].sort((a, b) => (b.date.localeCompare(a.date)) || String(b.id).localeCompare(String(a.id)));
   }
 
-  // ---------- Obliczenia ----------
-  // Zwraca { in: {EUR,PLN}, out: {EUR,PLN}, cats: { wydatek:{EUR,PLN}, ... }, saldo: {EUR,PLN} }
-  function kasa(list = state.ruchy) {
-    const z = () => ({ EUR: 0, PLN: 0 });
-    const r = { in: z(), out: z(), poza: z(), cats: { wydatek: z(), wyplata: z(), pati: z() }, saldo: z() };
+  // ---------- Dane wg zakładek ----------
+  const kasaList = () => state.ruchy.filter((e) => e.kind === 'out' || e.cel === 'wydatki' || !e.cel);
+  const wyplataList = () => state.ruchy.filter((e) => e.kind === 'in' && e.cel === 'wyplata');
+  const patiList = () => state.ruchy.filter((e) => e.kind === 'in' && e.cel === 'pati');
+
+  function sums(list) {
+    const r = { in: { EUR: 0, PLN: 0 }, out: { EUR: 0, PLN: 0 }, poza: { EUR: 0, PLN: 0 }, saldo: { EUR: 0, PLN: 0 } };
     for (const e of list) {
       const c = e.currency === 'PLN' ? 'PLN' : 'EUR';
-      if (e.kind === 'in') { r.in[c] += +e.amount; continue; }
-      const cat = r.cats[e.cat] || (r.cats[e.cat] = z());
-      cat[c] += +e.amount;
-      if (e.poza) r.poza[c] += +e.amount; else r.out[c] += +e.amount;
+      if (e.kind === 'in') r.in[c] += +e.amount;
+      else if (e.poza) r.poza[c] += +e.amount;
+      else r.out[c] += +e.amount;
     }
     r.saldo.EUR = r.in.EUR - r.out.EUR;
     r.saldo.PLN = r.in.PLN - r.out.PLN;
     return r;
   }
-  const patiPayments = () => state.ruchy.filter((e) => e.kind === 'out' && e.cat === 'pati');
   function saldoPati() {
     const earned = state.praca.reduce((s, e) => s + +e.amount, 0);
-    const paid = patiPayments().reduce((s, e) => s + (e.currency === 'PLN' ? plnToEur(+e.amount) : +e.amount), 0);
+    const paid = patiList().reduce((s, e) => s + (e.currency === 'PLN' ? plnToEur(+e.amount) : +e.amount), 0);
     return { earned, paid, due: earned - paid };
   }
 
@@ -199,16 +222,20 @@
 
   function amtHTML(e) {
     const plus = e.kind === 'in';
-    const sign = plus ? '+' : '−';
     const cls = plus ? 'plus' : (e.poza ? 'neutral' : 'minus');
-    return `<div class="amt ${cls}">${sign}${money(e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>`;
+    return `<div class="amt ${cls}">${plus ? '+' : '−'}${money(e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>`;
   }
 
   function ruchItemHTML(e) {
     const plus = e.kind === 'in';
-    const cat = CATS[e.cat] || CATS.wydatek;
-    const title = e.note || (plus ? 'Od szefa' : cat.one);
-    const sub = plus ? 'dostałem od szefa' : `${cat.icon} ${cat.label}${e.poza ? ' · nie z kasy szefa' : ''}`;
+    let title, sub;
+    if (plus) {
+      title = e.note || 'Od szefa';
+      sub = `dostałem · ${(CEL[e.cel] || CEL.wydatki).label}`;
+    } else {
+      title = e.note || 'Wydatek';
+      sub = e.poza ? 'wydałem · ze swojego' : 'wydałem';
+    }
     return `<button class="item" data-edit="ruch" data-id="${esc(e.id)}">
       <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
       <div class="note">${esc(title)}<small>${sub}</small></div>
@@ -216,61 +243,30 @@
     </button>`;
   }
 
-  function pair(v, cls = '') {
-    const parts = [];
-    if (v.EUR) parts.push(money(v.EUR, 'EUR'));
-    if (v.PLN) parts.push(money(v.PLN, 'PLN'));
-    if (!parts.length) return `<span class="muted">—</span>`;
-    return `<span class="${cls}">${parts.join(' + ')}</span>`;
-  }
-
   function renderKasa() {
-    $title.textContent = 'Kasa od szefa';
-    const all = state.ruchy;
-    const k = kasa(all);
-    const total = k.saldo.EUR + plnToEur(k.saldo.PLN);
-
-    let list = applyMonth(all, 'kasa');
-    if (catFilter === 'in') list = list.filter((e) => e.kind === 'in');
-    else if (catFilter !== 'all') list = list.filter((e) => e.kind === 'out' && e.cat === catFilter);
-    const filtered = sortDesc(list);
+    $title.textContent = 'Kasa na wydatki';
+    const all = kasaList();
+    const s = sums(all);
+    const filtered = sortDesc(applyMonth(all, 'kasa'));
 
     let html = `
       <div class="cards">
         <div class="card">
           <div class="label">Zostało €</div>
-          <div class="value ${k.saldo.EUR < 0 ? 'neg' : ''}">${money(k.saldo.EUR, 'EUR')}</div>
+          <div class="value ${s.saldo.EUR < 0 ? 'neg' : ''}">${money(s.saldo.EUR, 'EUR')}</div>
+          <div class="sub">dostałem ${money(s.in.EUR, 'EUR')}<br>wydałem ${money(s.out.EUR, 'EUR')}</div>
         </div>
         <div class="card">
           <div class="label">Zostało zł</div>
-          <div class="value ${k.saldo.PLN < 0 ? 'neg' : ''}">${money(k.saldo.PLN, 'PLN')}</div>
+          <div class="value ${s.saldo.PLN < 0 ? 'neg' : ''}">${money(s.saldo.PLN, 'PLN')}</div>
+          <div class="sub">dostałem ${money(s.in.PLN, 'PLN')}<br>wydałem ${money(s.out.PLN, 'PLN')}</div>
         </div>
       </div>
-      <div class="cards single">
-        <button class="card card-btn" data-action="rate">
-          <div class="label">Razem w € <span class="muted">(kurs ${rateText()} · dotknij, żeby zmienić)</span></div>
-          <div class="value ${total < 0 ? 'neg' : ''}">${money(total, 'EUR')}</div>
-        </button>
-      </div>
-      <div class="cards single">
-        <div class="card breakdown">
-          <div class="brow"><span>Dostałem od szefa</span>${pair(k.in, 'plus')}</div>
-          <div class="brow"><span>${CATS.wydatek.icon} Wydatki</span>${pair(k.cats.wydatek, 'minus')}</div>
-          <div class="brow"><span>${CATS.wyplata.icon} Wypłata</span>${pair(k.cats.wyplata, 'minus')}</div>
-          <div class="brow"><span>${CATS.pati.icon} Pati</span>${pair(k.cats.pati, 'minus')}</div>
-          ${(k.poza.EUR || k.poza.PLN) ? `<div class="brow muted"><span>w tym nie z kasy szefa</span>${pair(k.poza)}</div>` : ''}
-          <div class="brow total"><span>Zostało</span>${pair(k.saldo, k.saldo.EUR < 0 || k.saldo.PLN < 0 ? 'minus' : '')}</div>
-        </div>
-      </div>
-      <div class="chips">
-        ${[['all', 'Wszystko'], ['in', 'Dostałem'], ['wydatek', 'Wydatki'], ['wyplata', 'Wypłata'], ['pati', 'Pati']]
-          .map(([v, l]) => `<button class="chip ${catFilter === v ? 'active' : ''}" data-cat="${v}">${l}</button>`).join('')}
-      </div>
+      ${(s.poza.EUR || s.poza.PLN) ? `<p class="hint">Ze swojego zapłaciłem: ${[s.poza.EUR && money(s.poza.EUR, 'EUR'), s.poza.PLN && money(s.poza.PLN, 'PLN')].filter(Boolean).join(' + ')} (nie liczy się do „Zostało”).</p>` : ''}
       ${monthChipsHTML(all, 'kasa')}
     `;
-
     if (!filtered.length) {
-      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać kasę od szefa albo wpisać, na co poszła.</div>`;
+      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać kasę od szefa albo wydatek.</div>`;
     } else {
       html += listByMonthHTML(filtered, ruchItemHTML);
     }
@@ -278,10 +274,10 @@
   }
 
   function renderWyplata() {
-    $title.textContent = 'Wypłata';
-    const all = state.ruchy.filter((e) => e.kind === 'out' && e.cat === 'wyplata');
+    $title.textContent = 'Moja wypłata';
+    const all = wyplataList();
     const filtered = sortDesc(applyMonth(all, 'wyplata'));
-    const k = kasa(filtered).cats.wyplata;
+    const s = sums(filtered);
     const m = monthFilter.wyplata;
     const label = m === 'all' ? 'Razem' : monthLabelFull(m);
 
@@ -289,26 +285,23 @@
       <div class="cards">
         <div class="card">
           <div class="label">${label} €</div>
-          <div class="value">${money(k.EUR, 'EUR')}</div>
+          <div class="value">${money(s.in.EUR, 'EUR')}</div>
         </div>
         <div class="card">
           <div class="label">${label} zł</div>
-          <div class="value">${money(k.PLN, 'PLN')}</div>
-        </div>
-      </div>
-      <div class="cards single">
-        <div class="card">
-          <div class="label">Razem w € <span class="muted">(kurs ${rateText()})</span></div>
-          <div class="value">${money(k.EUR + plnToEur(k.PLN), 'EUR')}</div>
-          <div class="sub">wypłat: ${filtered.length} · wypłaty schodzą z kasy od szefa</div>
+          <div class="value">${money(s.in.PLN, 'PLN')}</div>
         </div>
       </div>
       ${monthChipsHTML(all, 'wyplata')}
     `;
     if (!filtered.length) {
-      html += `<div class="empty">Brak wypłat.<br>Dotknij <b>+</b>, żeby dodać wypłatę i wpisać, za co.</div>`;
+      html += `<div class="empty">Brak wypłat.<br>Dotknij <b>+</b>, żeby dodać wypłatę od szefa i wpisać, za co.</div>`;
     } else {
-      html += listByMonthHTML(filtered, ruchItemHTML);
+      html += listByMonthHTML(filtered, (e) => `<button class="item" data-edit="ruch" data-id="${esc(e.id)}">
+        <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
+        <div class="note">${esc(e.note) || 'Wypłata'}<small>od szefa</small></div>
+        ${amtHTML(e)}
+      </button>`);
     }
     $view.innerHTML = html;
   }
@@ -318,7 +311,7 @@
     const s = saldoPati();
     const items = [
       ...state.praca.map((e) => ({ ...e, _t: 'praca' })),
-      ...patiPayments().map((e) => ({ ...e, _t: 'ruch' })),
+      ...patiList().map((e) => ({ ...e, _t: 'ruch' })),
     ];
     const filtered = sortDesc(applyMonth(items, 'pati'));
 
@@ -333,20 +326,20 @@
       ${monthChipsHTML(items, 'pati')}
     `;
     if (!filtered.length) {
-      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać dzień pracy albo wypłatę dla Pati.</div>`;
+      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać dzień pracy albo kasę dla Pati.</div>`;
     } else {
       html += listByMonthHTML(filtered, (e) => {
         if (e._t === 'praca') {
           return `<button class="item" data-edit="praca" data-id="${esc(e.id)}">
             <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
-            <div class="note">Praca u Svena${e.note ? `<small>${esc(e.note)}</small>` : '<small>zarobione</small>'}</div>
+            <div class="note">Praca u Svena<small>${e.note ? esc(e.note) : 'zarobione'}</small></div>
             <div class="amt plus">+${money(e.amount, 'EUR')}</div>
           </button>`;
         }
         return `<button class="item" data-edit="ruch" data-id="${esc(e.id)}">
           <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
-          <div class="note">Pati dostała kasę<small>${e.poza ? 'nie z kasy szefa' : 'z kasy szefa'}${e.note && e.note !== 'Wypłata dla Pati' ? ' · ' + esc(e.note) : ''}</small></div>
-          ${amtHTML(e)}
+          <div class="note">Pati dostała kasę<small>${e.note ? esc(e.note) : 'od szefa'}</small></div>
+          <div class="amt minus">−${money(e.amount, e.currency)}</div>
         </button>`;
       });
     }
@@ -382,7 +375,7 @@
           <span class="muted">zł</span>
         </label>
       </div>
-      <p class="hint">Po tym kursie przeliczane są złotówki na euro w karcie „Razem w €” i w podsumowaniu.</p>
+      <p class="hint">Używany tylko do podglądu „≈ … €” przy kwotach w złotówkach.</p>
 
       <div class="section-title"><span>Podsumowanie</span></div>
       <pre class="summary">${esc(summaryText())}</pre>
@@ -412,30 +405,35 @@
     return parts.length ? parts.join(' + ') : '—';
   }
   function summaryText() {
-    const k = kasa();
+    const k = sums(kasaList());
+    const w = sums(wyplataList());
     const p = saldoPati();
     const lines = [];
     lines.push(`ROZLICZENIE – stan na ${fmtDate(todayISO())}`);
     lines.push('');
-    lines.push(`Dostałem od szefa:  ${pairText(k.in)}`);
-    lines.push(`  Wydatki:          ${pairText(k.cats.wydatek)}`);
-    lines.push(`  Wypłata:          ${pairText(k.cats.wyplata)}`);
-    lines.push(`  Pati:             ${pairText(k.cats.pati)}`);
-    if (k.poza.EUR || k.poza.PLN) lines.push(`  (w tym nie z kasy szefa: ${pairText(k.poza)})`);
-    lines.push(`ZOSTAŁO:            ${money(k.saldo.EUR, 'EUR')}  |  ${money(k.saldo.PLN, 'PLN')}`);
-    lines.push(`Razem ≈ ${money(k.saldo.EUR + plnToEur(k.saldo.PLN), 'EUR')}  (kurs ${rateText()})`);
-    lines.push('');
-    lines.push('Wpisy:');
-    for (const e of sortDesc(state.ruchy).reverse()) {
+    lines.push('KASA NA WYDATKI');
+    lines.push(`Dostałem:  ${money(k.in.EUR, 'EUR')}  |  ${money(k.in.PLN, 'PLN')}`);
+    lines.push(`Wydałem:   ${money(k.out.EUR, 'EUR')}  |  ${money(k.out.PLN, 'PLN')}`);
+    lines.push(`ZOSTAŁO:   ${money(k.saldo.EUR, 'EUR')}  |  ${money(k.saldo.PLN, 'PLN')}`);
+    if (k.poza.EUR || k.poza.PLN) lines.push(`Ze swojego zapłaciłem: ${pairText(k.poza)}`);
+    for (const e of sortDesc(kasaList()).reverse()) {
       const sign = e.kind === 'in' ? '+' : '−';
-      const tag = e.kind === 'in' ? 'od szefa' : (CATS[e.cat] ? CATS[e.cat].label : e.cat) + (e.poza ? ' (nie z kasy)' : '');
-      lines.push(`${fmtDate(e.date)}  ${sign}${money(e.amount, e.currency)}  ${tag}${e.note ? '  ' + e.note : ''}`);
+      lines.push(`  ${fmtDate(e.date)}  ${sign}${money(e.amount, e.currency)}${e.poza ? ' (ze swojego)' : ''}${e.note ? '  ' + e.note : ''}`);
+    }
+    lines.push('');
+    lines.push('MOJA WYPŁATA');
+    lines.push(`Razem: ${pairText(w.in)}`);
+    for (const e of sortDesc(wyplataList()).reverse()) {
+      lines.push(`  ${fmtDate(e.date)}  ${money(e.amount, e.currency)}${e.note ? '  ' + e.note : ''}`);
     }
     lines.push('');
     lines.push('PATI U SVENA');
     lines.push(`Zarobione: ${money(p.earned, 'EUR')}, dostała: ${money(p.paid, 'EUR')}, do zapłaty: ${money(p.due, 'EUR')}`);
     for (const e of sortDesc(state.praca).reverse()) {
-      lines.push(`${fmtDate(e.date)}  praca  ${money(e.amount, 'EUR')}${e.note ? '  ' + e.note : ''}`);
+      lines.push(`  ${fmtDate(e.date)}  praca  ${money(e.amount, 'EUR')}${e.note ? '  ' + e.note : ''}`);
+    }
+    for (const e of sortDesc(patiList()).reverse()) {
+      lines.push(`  ${fmtDate(e.date)}  dostała  ${money(e.amount, e.currency)}${e.note ? '  ' + e.note : ''}`);
     }
     return lines.join('\n');
   }
@@ -458,26 +456,27 @@
   const dlgPatiWybor = document.getElementById('dlg-pati-wybor');
 
   const NOTE_PLACEHOLDER = {
-    in: 'np. zaliczka, na materiały…',
-    wydatek: 'np. paliwo, materiały…',
-    wyplata: 'np. wypłata za wrzesień, premia…',
+    out: 'np. paliwo, materiały…',
+    wydatki: 'np. zaliczka na materiały…',
+    wyplata: 'np. za wrzesień, premia…',
     pati: 'np. za sierpień…',
   };
 
   function syncRuchForm() {
-    const out = formRuch.kind.value === 'out';
-    formRuch.classList.toggle('is-in', !out);
-    const key = out ? formRuch.cat.value : 'in';
+    const isIn = formRuch.kind.value === 'in';
+    formRuch.classList.toggle('is-in', isIn);
+    formRuch.classList.toggle('is-out', !isIn);
+    const key = isIn ? formRuch.cel.value : 'out';
     formRuch.note.placeholder = NOTE_PLACEHOLDER[key] || '';
-    document.getElementById('note-label').textContent = out ? (key === 'wydatek' ? 'Na co dokładnie' : 'Za co / opis') : 'Opis (opcjonalnie)';
+    document.getElementById('note-label').textContent = isIn ? 'Za co / opis (opcjonalnie)' : 'Na co';
   }
 
-  // preset: { kind, cat }
+  // preset: { kind, cel }
   function openRuch(entry, preset = {}) {
     formRuch.reset();
     formRuch.id.value = entry ? entry.id : '';
     formRuch.kind.value = entry ? entry.kind : (preset.kind || 'out');
-    formRuch.cat.value = entry ? (entry.cat || 'wydatek') : (preset.cat || 'wydatek');
+    formRuch.cel.value = entry ? (entry.cel || 'wydatki') : (preset.cel || 'wydatki');
     formRuch.date.value = entry ? entry.date : todayISO();
     formRuch.amount.value = entry ? entry.amount : '';
     formRuch.currency.value = entry ? entry.currency : 'EUR';
@@ -502,7 +501,7 @@
   }
 
   formRuch.addEventListener('change', (ev) => {
-    if (ev.target.name === 'kind' || ev.target.name === 'cat') syncRuchForm();
+    if (ev.target.name === 'kind' || ev.target.name === 'cel') syncRuchForm();
   });
 
   formRuch.addEventListener('submit', (ev) => {
@@ -516,10 +515,10 @@
       date: formRuch.date.value,
       amount: Math.round(amount * 100) / 100,
       currency: formRuch.currency.value,
-      cat: kind === 'out' ? formRuch.cat.value : null,
       note: formRuch.note.value.trim(),
     };
-    if (kind === 'out' && formRuch.poza.checked) entry.poza = true;
+    if (kind === 'in') entry.cel = formRuch.cel.value;
+    else if (formRuch.poza.checked) entry.poza = true;
     upsert(state.ruchy, entry);
     save(); dlgRuch.close(); render();
     toast('Zapisano');
@@ -563,7 +562,7 @@
     b.addEventListener('click', () => {
       dlgPatiWybor.close();
       if (b.dataset.patiAdd === 'praca') openPraca(null);
-      else openRuch(null, { kind: 'out', cat: 'pati' });
+      else openRuch(null, { kind: 'in', cel: 'pati' });
     });
   });
 
@@ -578,8 +577,8 @@
   });
 
   $fab.addEventListener('click', () => {
-    if (tab === 'kasa') openRuch(null, { kind: catFilter === 'in' ? 'in' : 'out', cat: ['wydatek', 'wyplata', 'pati'].includes(catFilter) ? catFilter : 'wydatek' });
-    else if (tab === 'wyplata') openRuch(null, { kind: 'out', cat: 'wyplata' });
+    if (tab === 'kasa') openRuch(null, { kind: 'out' });
+    else if (tab === 'wyplata') openRuch(null, { kind: 'in', cel: 'wyplata' });
     else if (tab === 'pati') dlgPatiWybor.showModal();
   });
 
@@ -587,29 +586,24 @@
     const chip = ev.target.closest('.chip');
     if (chip) {
       if (chip.dataset.month) monthFilter[tab] = chip.dataset.month;
-      if (chip.dataset.cat) catFilter = chip.dataset.cat;
       render();
       return;
     }
-
     const item = ev.target.closest('[data-edit]');
     if (item) {
-      const which = item.dataset.edit;
-      if (which === 'ruch') {
+      if (item.dataset.edit === 'ruch') {
         const entry = state.ruchy.find((e) => e.id === item.dataset.id);
         if (entry) openRuch(entry);
-      } else if (which === 'praca') {
+      } else {
         const entry = state.praca.find((e) => e.id === item.dataset.id);
         if (entry) openPraca(entry);
       }
       return;
     }
-
     const act = ev.target.closest('[data-action]');
     if (act) handleAction(act.dataset.action);
   });
 
-  // zmiana kursu w ustawieniach
   $view.addEventListener('change', (ev) => {
     if (ev.target.id !== 'rate-input') return;
     const v = parseFloat(String(ev.target.value).replace(',', '.'));
@@ -620,15 +614,7 @@
   });
 
   async function handleAction(action) {
-    if (action === 'rate') {
-      const v = prompt('Kurs euro – ile złotych za 1 €?', String(rate()).replace('.', ','));
-      if (v === null) return;
-      const n = parseFloat(String(v).replace(',', '.'));
-      if (!(n > 0)) { toast('Podaj kurs większy od zera'); return; }
-      state.settings = { ...(state.settings || {}), rate: Math.round(n * 10000) / 10000 };
-      save(); render();
-      toast(`Kurs: ${rateText()}`);
-    } else if (action === 'copy') {
+    if (action === 'copy') {
       try {
         await navigator.clipboard.writeText(summaryText());
         toast('Skopiowano do schowka');
@@ -669,10 +655,9 @@
     ev.target.value = '';
     if (!file) return;
     try {
-      const parsed = JSON.parse(await file.text());
-      const migrated = migrate(parsed);
+      const migrated = migrate(JSON.parse(await file.text()));
       if (!migrated) throw new Error('zły format');
-      if (!confirm(`Wczytać ${migrated.ruchy.length} wpisów kasy i ${migrated.praca.length} dni pracy Pati? Obecne dane zostaną zastąpione.`)) return;
+      if (!confirm(`Wczytać ${migrated.ruchy.length} wpisów i ${migrated.praca.length} dni pracy Pati? Obecne dane zostaną zastąpione.`)) return;
       state = migrated;
       save(); render();
       toast('Dane wczytane');

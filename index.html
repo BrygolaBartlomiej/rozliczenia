@@ -46,14 +46,14 @@
       <input type="hidden" name="id">
       <div class="seg" role="radiogroup">
         <label><input type="radio" name="kind" value="in"><span>Dostałem od szefa</span></label>
-        <label><input type="radio" name="kind" value="out" checked><span>Poszło na…</span></label>
+        <label><input type="radio" name="kind" value="out" checked><span>Wydałem</span></label>
       </div>
-      <div class="field only-out" id="cat-field">
-        <span>Na co</span>
+      <div class="field only-in" id="cel-field">
+        <span>Co to za pieniądze?</span>
         <div class="seg cats" role="radiogroup">
-          <label><input type="radio" name="cat" value="wydatek" checked><span>Wydatki</span></label>
-          <label><input type="radio" name="cat" value="wyplata"><span>Wypłata</span></label>
-          <label><input type="radio" name="cat" value="pati"><span>Pati</span></label>
+          <label><input type="radio" name="cel" value="wydatki" checked><span>Na wydatki</span></label>
+          <label><input type="radio" name="cel" value="wyplata"><span>Moja wypłata</span></label>
+          <label><input type="radio" name="cel" value="pati"><span>Dla Pati</span></label>
         </div>
       </div>
       <label class="field">
@@ -79,7 +79,7 @@
       </label>
       <label class="check only-out">
         <input type="checkbox" name="poza">
-        <span>Nie z kasy szefa <small>(z własnej kieszeni – nie odejmuje od salda)</small></span>
+        <span>Zapłaciłem ze swojego <small>(nie odejmuje od kasy szefa)</small></span>
       </label>
       <div class="actions">
         <button type="button" class="btn danger" id="btn-ruch-delete" hidden>Usuń</button>
@@ -121,7 +121,7 @@
     <form method="dialog" class="menu-form">
       <h2>Co dodać?</h2>
       <button type="button" class="btn block" data-pati-add="praca"><span>Dzień pracy u Svena</span><span>🛠️</span></button>
-      <button type="button" class="btn block" data-pati-add="wyplata"><span>Pati dostała kasę (z kasy szefa)</span><span>💶</span></button>
+      <button type="button" class="btn block" data-pati-add="wyplata"><span>Pati dostała kasę</span><span>💶</span></button>
       <div class="actions">
         <span class="grow"></span>
         <button type="button" class="btn" data-close>Anuluj</button>
