@@ -1,4 +1,4 @@
-const CACHE = 'rozliczenia-v6';
+const CACHE = 'rozliczenia-v7';
 const ASSETS = [
   './',
   './index.html',

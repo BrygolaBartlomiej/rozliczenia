@@ -185,6 +185,13 @@
     r.saldo.PLN = r.in.PLN - r.out.PLN;
     return r;
   }
+  function eurToPln(v) { return v * rate(); }
+  function netSaldo(s) {
+    return {
+      eur: s.saldo.EUR + plnToEur(s.saldo.PLN),
+      pln: eurToPln(s.saldo.EUR) + s.saldo.PLN,
+    };
+  }
   function saldoPati() {
     const earned = state.praca.reduce((s, e) => s + +e.amount, 0);
     const paid = patiList().reduce((s, e) => s + (e.currency === 'PLN' ? plnToEur(+e.amount) : +e.amount), 0);
@@ -247,10 +254,19 @@
     $title.textContent = 'Kasa na wydatki';
     const all = kasaList();
     const s = sums(all);
+    const net = netSaldo(s);
     const filtered = sortDesc(applyMonth(all, 'kasa'));
-    const minusHint = (s.saldo.EUR < 0 || s.saldo.PLN < 0)
-      ? '<p class="hint">Czerwone = wydałeś więcej, niż szef dał na wydatki.</p>'
+    const minusHint = net.eur < 0
+      ? '<p class="hint">Czerwone = nawet po przeliczeniu wydałeś więcej, niż szef dał na wydatki.</p>'
       : '';
+    let split;
+    if (s.saldo.EUR > 0 && s.saldo.PLN < 0) {
+      split = `${money(s.saldo.EUR, 'EUR')} pokrywa ${money(s.saldo.PLN, 'PLN')}`;
+    } else if (s.saldo.PLN > 0 && s.saldo.EUR < 0) {
+      split = `${money(s.saldo.PLN, 'PLN')} pokrywa ${money(s.saldo.EUR, 'EUR')}`;
+    } else {
+      split = `osobno: ${money(s.saldo.EUR, 'EUR')} i ${money(s.saldo.PLN, 'PLN')}`;
+    }
 
     let html = `
       <div class="howto">
@@ -260,17 +276,12 @@
         </ol>
         <p class="muted" style="margin:8px 0 0">Wypłata i kasa dla Pati są na swoich kartach na dole. Nie odejmują się tu od „Zostało”.</p>
       </div>
-      <div class="cards">
-        <div class="card">
-          <div class="label">Zostało €</div>
-          <div class="value ${s.saldo.EUR < 0 ? 'neg' : ''}">${money(s.saldo.EUR, 'EUR')}</div>
-          <div class="sub">szef dał ${money(s.in.EUR, 'EUR')}<br>wydałeś ${money(s.out.EUR, 'EUR')}</div>
-        </div>
-        <div class="card">
-          <div class="label">Zostało zł</div>
-          <div class="value ${s.saldo.PLN < 0 ? 'neg' : ''}">${money(s.saldo.PLN, 'PLN')}</div>
-          <div class="sub">szef dał ${money(s.in.PLN, 'PLN')}<br>wydałeś ${money(s.out.PLN, 'PLN')}</div>
-        </div>
+      <div class="cards single">
+        <button class="card card-btn" data-action="rate">
+          <div class="label">Zostało</div>
+          <div class="value ${net.eur < 0 ? 'neg' : ''}">${money(net.eur, 'EUR')}</div>
+          <div class="sub">= ${money(net.pln, 'PLN')} · ${split}<br>kurs ${rateText()} · dotknij, żeby zmienić</div>
+        </button>
       </div>
       ${minusHint}
       ${(s.poza.EUR || s.poza.PLN) ? `<p class="hint">Ze swojego zapłaciłeś: ${[s.poza.EUR && money(s.poza.EUR, 'EUR'), s.poza.PLN && money(s.poza.PLN, 'PLN')].filter(Boolean).join(' + ')} — to nie schodzi z kasy szefa.</p>` : ''}
@@ -425,7 +436,9 @@
     lines.push('KASA NA WYDATKI');
     lines.push(`Dostałem:  ${money(k.in.EUR, 'EUR')}  |  ${money(k.in.PLN, 'PLN')}`);
     lines.push(`Wydałem:   ${money(k.out.EUR, 'EUR')}  |  ${money(k.out.PLN, 'PLN')}`);
-    lines.push(`ZOSTAŁO:   ${money(k.saldo.EUR, 'EUR')}  |  ${money(k.saldo.PLN, 'PLN')}`);
+    const kn = netSaldo(k);
+    lines.push(`ZOSTAŁO:   ${money(kn.eur, 'EUR')}  ≈  ${money(kn.pln, 'PLN')}  (kurs ${rateText()})`);
+    lines.push(`  (osobno: ${money(k.saldo.EUR, 'EUR')}  |  ${money(k.saldo.PLN, 'PLN')})`);
     if (k.poza.EUR || k.poza.PLN) lines.push(`Ze swojego zapłaciłem: ${pairText(k.poza)}`);
     for (const e of sortDesc(kasaList()).reverse()) {
       const sign = e.kind === 'in' ? '+' : '−';
@@ -640,7 +653,15 @@
   });
 
   async function handleAction(action) {
-    if (action === 'copy') {
+    if (action === 'rate') {
+      const v = prompt('Kurs euro – ile złotych za 1 €?', String(rate()).replace('.', ','));
+      if (v === null) return;
+      const n = parseFloat(String(v).replace(',', '.'));
+      if (!(n > 0)) { toast('Podaj kurs większy od zera'); return; }
+      state.settings = { ...(state.settings || {}), rate: Math.round(n * 10000) / 10000 };
+      save(); render();
+      toast(`Kurs: ${rateText()}`);
+    } else if (action === 'copy') {
       try {
         await navigator.clipboard.writeText(summaryText());
         toast('Skopiowano do schowka');
