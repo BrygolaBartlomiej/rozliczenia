@@ -45,16 +45,17 @@
       <h2 id="dlg-ruch-title">Nowy wpis</h2>
       <input type="hidden" name="id">
       <div class="seg" role="radiogroup">
-        <label><input type="radio" name="kind" value="in"><span>Dostałem od szefa</span></label>
+        <label><input type="radio" name="kind" value="in"><span>Szef dał mi</span></label>
         <label><input type="radio" name="kind" value="out" checked><span>Wydałem</span></label>
       </div>
       <div class="field only-in" id="cel-field">
-        <span>Co to za pieniądze?</span>
+        <span>Co to jest?</span>
         <div class="seg cats" role="radiogroup">
           <label><input type="radio" name="cel" value="wydatki" checked><span>Na wydatki</span></label>
           <label><input type="radio" name="cel" value="wyplata"><span>Moja wypłata</span></label>
           <label><input type="radio" name="cel" value="pati"><span>Dla Pati</span></label>
         </div>
+        <p class="field-hint" id="cel-hint"></p>
       </div>
       <label class="field">
         <span>Data</span>
@@ -112,6 +113,20 @@
         <span class="grow"></span>
         <button type="button" class="btn" data-close>Anuluj</button>
         <button type="submit" class="btn primary">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Wybór: co dodać w zakładce Kasa -->
+  <dialog id="dlg-kasa-wybor">
+    <form method="dialog" class="menu-form">
+      <h2>Co chcesz wpisać?</h2>
+      <button type="button" class="btn block" data-kasa-add="in"><span>Szef dał mi kasę</span><span>💶</span></button>
+      <button type="button" class="btn block" data-kasa-add="out"><span>Wydałem na coś</span><span>🧾</span></button>
+      <p class="hint">Jak szef daje kasę — od razu mówisz, czy to na wydatki, Twoja wypłata, czy dla Pati.</p>
+      <div class="actions">
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Anuluj</button>
       </div>
     </form>
   </dialog>

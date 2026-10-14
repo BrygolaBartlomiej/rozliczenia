@@ -248,25 +248,36 @@
     const all = kasaList();
     const s = sums(all);
     const filtered = sortDesc(applyMonth(all, 'kasa'));
+    const minusHint = (s.saldo.EUR < 0 || s.saldo.PLN < 0)
+      ? '<p class="hint">Czerwone = wydałeś więcej, niż szef dał na wydatki.</p>'
+      : '';
 
     let html = `
+      <div class="howto">
+        <ol>
+          <li><b>Szef dał mi</b> — wpisujesz kasę i od razu mówisz, co to: na wydatki, Twoja wypłata albo dla Pati.</li>
+          <li><b>Wydałem</b> — tylko zakupy z kasy na wydatki (paliwo, materiały…).</li>
+        </ol>
+        <p class="muted" style="margin:8px 0 0">Wypłata i kasa dla Pati są na swoich kartach na dole. Nie odejmują się tu od „Zostało”.</p>
+      </div>
       <div class="cards">
         <div class="card">
           <div class="label">Zostało €</div>
           <div class="value ${s.saldo.EUR < 0 ? 'neg' : ''}">${money(s.saldo.EUR, 'EUR')}</div>
-          <div class="sub">dostałem ${money(s.in.EUR, 'EUR')}<br>wydałem ${money(s.out.EUR, 'EUR')}</div>
+          <div class="sub">szef dał ${money(s.in.EUR, 'EUR')}<br>wydałeś ${money(s.out.EUR, 'EUR')}</div>
         </div>
         <div class="card">
           <div class="label">Zostało zł</div>
           <div class="value ${s.saldo.PLN < 0 ? 'neg' : ''}">${money(s.saldo.PLN, 'PLN')}</div>
-          <div class="sub">dostałem ${money(s.in.PLN, 'PLN')}<br>wydałem ${money(s.out.PLN, 'PLN')}</div>
+          <div class="sub">szef dał ${money(s.in.PLN, 'PLN')}<br>wydałeś ${money(s.out.PLN, 'PLN')}</div>
         </div>
       </div>
-      ${(s.poza.EUR || s.poza.PLN) ? `<p class="hint">Ze swojego zapłaciłem: ${[s.poza.EUR && money(s.poza.EUR, 'EUR'), s.poza.PLN && money(s.poza.PLN, 'PLN')].filter(Boolean).join(' + ')} (nie liczy się do „Zostało”).</p>` : ''}
+      ${minusHint}
+      ${(s.poza.EUR || s.poza.PLN) ? `<p class="hint">Ze swojego zapłaciłeś: ${[s.poza.EUR && money(s.poza.EUR, 'EUR'), s.poza.PLN && money(s.poza.PLN, 'PLN')].filter(Boolean).join(' + ')} — to nie schodzi z kasy szefa.</p>` : ''}
       ${monthChipsHTML(all, 'kasa')}
     `;
     if (!filtered.length) {
-      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać kasę od szefa albo wydatek.</div>`;
+      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b> na dole.</div>`;
     } else {
       html += listByMonthHTML(filtered, ruchItemHTML);
     }
@@ -453,6 +464,7 @@
   const formRuch = document.getElementById('form-ruch');
   const dlgPraca = document.getElementById('dlg-praca');
   const formPraca = document.getElementById('form-praca');
+  const dlgKasaWybor = document.getElementById('dlg-kasa-wybor');
   const dlgPatiWybor = document.getElementById('dlg-pati-wybor');
 
   const NOTE_PLACEHOLDER = {
@@ -468,7 +480,14 @@
     formRuch.classList.toggle('is-out', !isIn);
     const key = isIn ? formRuch.cel.value : 'out';
     formRuch.note.placeholder = NOTE_PLACEHOLDER[key] || '';
-    document.getElementById('note-label').textContent = isIn ? 'Za co / opis (opcjonalnie)' : 'Na co';
+    document.getElementById('note-label').textContent = isIn ? 'Opis (opcjonalnie)' : 'Na co';
+    const hints = {
+      wydatki: 'Ta kasa zostaje tu. Potem wpisujesz, na co ją wydałeś.',
+      wyplata: 'To Twoje pieniądze. Widać je na karcie Wypłata, nie odejmuje się od „Zostało”.',
+      pati: 'To kasa dla Pati. Widać ją na karcie Pati, nie odejmuje się od „Zostało”.',
+    };
+    const $hint = document.getElementById('cel-hint');
+    if ($hint) $hint.textContent = isIn ? (hints[formRuch.cel.value] || '') : '';
   }
 
   // preset: { kind, cel }
@@ -555,8 +574,15 @@
   document.querySelectorAll('[data-close]').forEach((b) => {
     b.addEventListener('click', () => b.closest('dialog').close());
   });
-  [dlgRuch, dlgPraca, dlgPatiWybor].forEach((d) => {
+  [dlgRuch, dlgPraca, dlgKasaWybor, dlgPatiWybor].forEach((d) => {
     d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
+  });
+  dlgKasaWybor.querySelectorAll('[data-kasa-add]').forEach((b) => {
+    b.addEventListener('click', () => {
+      dlgKasaWybor.close();
+      if (b.dataset.kasaAdd === 'in') openRuch(null, { kind: 'in', cel: 'wydatki' });
+      else openRuch(null, { kind: 'out' });
+    });
   });
   dlgPatiWybor.querySelectorAll('[data-pati-add]').forEach((b) => {
     b.addEventListener('click', () => {
@@ -577,7 +603,7 @@
   });
 
   $fab.addEventListener('click', () => {
-    if (tab === 'kasa') openRuch(null, { kind: 'out' });
+    if (tab === 'kasa') dlgKasaWybor.showModal();
     else if (tab === 'wyplata') openRuch(null, { kind: 'in', cel: 'wyplata' });
     else if (tab === 'pati') dlgPatiWybor.showModal();
   });

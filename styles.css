@@ -75,6 +75,27 @@ main {
   margin-bottom: 14px;
 }
 .cards.single { grid-template-columns: 1fr; }
+.howto {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.06);
+  font-size: 15px;
+  line-height: 1.45;
+}
+.howto ol {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.howto li { margin: 4px 0; }
+.howto .muted { font-size: 13px; }
+.field-hint {
+  margin: 4px 2px 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.35;
+}
 .card {
   background: var(--card);
   border-radius: var(--radius);
