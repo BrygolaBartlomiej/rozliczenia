@@ -1,55 +1,111 @@
-/* Rozliczenia – prosta PWA, dane trzymane w localStorage telefonu. */
+/* Rozliczenia – prosta PWA, dane trzymane w localStorage telefonu.
+ *
+ * Model (wersja 2):
+ *   ruchy: [{ id, date, amount, currency, kind: 'in' | 'out', cat: 'wydatek'|'wyplata'|'pati'|null, note, poza }]
+ *     kind 'in'  = pieniądze od szefa (jedna pula)
+ *     kind 'out' = na co poszły (kategoria), poza=true → nie z kasy szefa (nie odejmuje od salda)
+ *   praca: [{ id, date, amount, note }]  – dni pracy Pati u Svena (zarobione €)
+ */
 (() => {
   'use strict';
 
   const STORAGE_KEY = 'rozliczenia.v1';
-
-  // ---------- Dane startowe (z arkusza) ----------
+  const VERSION = 2;
   const DEFAULT_RATE = 4.2; // ile zł za 1 € (1429 zł → 340,24 € w arkuszu)
 
+  const CATS = {
+    wydatek: { label: 'Wydatki', one: 'Wydatek', icon: '🧾' },
+    wyplata: { label: 'Wypłata', one: 'Wypłata', icon: '💰' },
+    pati:    { label: 'Pati',    one: 'Dla Pati', icon: '👩‍🔧' },
+  };
+
+  // ---------- Dane startowe (z arkusza) ----------
   const SEED = {
-    version: 1,
+    version: VERSION,
     settings: { rate: DEFAULT_RATE },
-    szef: [
-      { id: 's1', type: 'wplata',  date: '2026-09-23', amount: 650, currency: 'EUR', note: 'Od szefa' },
-      { id: 's2', type: 'wydatek', date: '2026-09-30', amount: 340, currency: 'EUR', note: 'Zakupy 1429 zł (598+264+290+68+66+97+46) ≈ 340 €' },
-      { id: 's3', type: 'wydatek', date: '2026-09-30', amount: 270, currency: 'EUR', note: 'Pozostałe wydatki do 01.10' },
-      { id: 's4', type: 'wydatek', date: '2026-10-12', amount: 285, currency: 'PLN', note: '' },
-      { id: 's5', type: 'wplata',  date: '2026-10-13', amount: 300, currency: 'PLN', note: 'Od szefa' },
-      { id: 's6', type: 'wplata',  date: '2026-10-13', amount: 100, currency: 'EUR', note: 'Od szefa' },
-      { id: 's7', type: 'wydatek', date: '2026-10-13', amount: 100, currency: 'EUR', note: 'DO SPRAWDZENIA – wg arkusza zostało 40 €' },
+    ruchy: [
+      { id: 's1', kind: 'in',  date: '2026-09-23', amount: 650, currency: 'EUR', cat: null, note: '' },
+      { id: 's2', kind: 'out', date: '2026-09-30', amount: 340, currency: 'EUR', cat: 'wydatek', note: 'Zakupy 1429 zł (598+264+290+68+66+97+46) ≈ 340 €' },
+      { id: 's3', kind: 'out', date: '2026-09-30', amount: 270, currency: 'EUR', cat: 'wydatek', note: 'Pozostałe wydatki do 01.10' },
+      { id: 's4', kind: 'out', date: '2026-10-12', amount: 285, currency: 'PLN', cat: 'wydatek', note: '' },
+      { id: 's5', kind: 'in',  date: '2026-10-13', amount: 300, currency: 'PLN', cat: null, note: '' },
+      { id: 's6', kind: 'in',  date: '2026-10-13', amount: 100, currency: 'EUR', cat: null, note: '' },
+      { id: 's7', kind: 'out', date: '2026-10-13', amount: 100, currency: 'EUR', cat: 'pati', note: 'Wypłata dla Pati' },
+      { id: 'p3', kind: 'out', date: '2026-09-01', amount: 100, currency: 'EUR', cat: 'pati', note: 'Wypłata dla Pati (przed 23.09 – sprawdź)', poza: true },
     ],
-    wyplata: [],
-    pati: [
-      { id: 'p1', type: 'praca',   date: '2026-08-12', amount: 100, note: '' },
-      { id: 'p2', type: 'praca',   date: '2026-08-26', amount: 200, note: '' },
-      { id: 'p3', type: 'wyplata', date: '2026-09-01', amount: 100, note: '' },
-      { id: 'p4', type: 'praca',   date: '2026-09-09', amount: 100, note: '' },
-      { id: 'p5', type: 'praca',   date: '2026-10-07', amount: 100, note: '' },
-      { id: 'p6', type: 'wyplata', date: '2026-10-13', amount: 100, note: '' },
+    praca: [
+      { id: 'p1', date: '2026-08-12', amount: 100, note: '' },
+      { id: 'p2', date: '2026-08-26', amount: 200, note: '' },
+      { id: 'p4', date: '2026-09-09', amount: 100, note: '' },
+      { id: 'p5', date: '2026-10-07', amount: 100, note: '' },
     ],
   };
 
   // ---------- Stan ----------
   let state = load();
-  let tab = 'szef';
-  let monthFilter = { szef: 'all', wyplata: 'all', pati: 'all' };
+  let tab = 'kasa';
+  let monthFilter = { kasa: 'all', wyplata: 'all', pati: 'all' };
+  let catFilter = 'all'; // kasa: all | in | wydatek | wyplata | pati
 
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.szef) && Array.isArray(parsed.pati)) {
-          if (!parsed.settings || !(parsed.settings.rate > 0)) parsed.settings = { rate: DEFAULT_RATE };
-          if (!Array.isArray(parsed.wyplata)) parsed.wyplata = [];
-          return parsed;
-        }
+        const migrated = migrate(parsed);
+        if (migrated) { save(migrated); return migrated; }
       }
     } catch (e) { /* ignorujemy, zaczynamy od seeda */ }
     const copy = JSON.parse(JSON.stringify(SEED));
     save(copy);
     return copy;
+  }
+
+  // Migracja ze starego modelu (szef / wyplata / pati) do nowego (ruchy / praca).
+  function migrate(p) {
+    if (!p || typeof p !== 'object') return null;
+    const rate = p.settings && p.settings.rate > 0 ? p.settings.rate : DEFAULT_RATE;
+
+    if (Array.isArray(p.ruchy) && Array.isArray(p.praca)) {
+      p.version = VERSION;
+      p.settings = { rate };
+      return p;
+    }
+    if (!Array.isArray(p.szef) || !Array.isArray(p.pati)) return null;
+
+    const ruchy = [];
+    const praca = [];
+    let hadS7 = false;
+
+    for (const e of p.szef) {
+      if (e.type === 'wplata') {
+        ruchy.push({ id: e.id, kind: 'in', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: null, note: e.note === 'Od szefa' ? '' : (e.note || '') });
+      } else if (e.id === 's7' && /DO SPRAWDZENIA/.test(e.note || '')) {
+        // niewyjaśnione 100 € z 13.10 = wypłata dla Pati tego samego dnia
+        hadS7 = true;
+        ruchy.push({ id: 's7', kind: 'out', date: e.date, amount: +e.amount, currency: 'EUR', cat: 'pati', note: 'Wypłata dla Pati' });
+      } else {
+        ruchy.push({ id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: 'wydatek', note: e.note || '' });
+      }
+    }
+    for (const e of (Array.isArray(p.wyplata) ? p.wyplata : [])) {
+      ruchy.push({ id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: e.currency || 'EUR', cat: 'wyplata', note: e.note || '' });
+    }
+    const firstIn = ruchy.filter((r) => r.kind === 'in').map((r) => r.date).sort()[0];
+    for (const e of p.pati) {
+      if (e.type === 'praca') {
+        praca.push({ id: e.id, date: e.date, amount: +e.amount, note: e.note || '' });
+      } else {
+        if (hadS7 && e.id === 'p6') continue; // już scalone z s7
+        const poza = !!firstIn && e.date < firstIn; // wypłata zanim była jakakolwiek kasa od szefa
+        ruchy.push({
+          id: e.id, kind: 'out', date: e.date, amount: +e.amount, currency: 'EUR', cat: 'pati',
+          note: e.note || (poza ? `Wypłata dla Pati (przed ${fmtDate(firstIn)} – sprawdź)` : 'Wypłata dla Pati'),
+          poza,
+        });
+      }
+    }
+    return { version: VERSION, settings: { rate }, ruchy, praca };
   }
 
   function save(s = state) {
@@ -63,7 +119,6 @@
   // ---------- Formatowanie ----------
   const nf = new Intl.NumberFormat('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const money = (v, cur) => `${nf.format(v)} ${cur === 'PLN' ? 'zł' : '€'}`;
-  const signed = (v, cur) => (v >= 0 ? '+' : '−') + money(Math.abs(v), cur);
   const rate = () => (state.settings && state.settings.rate > 0 ? state.settings.rate : DEFAULT_RATE);
   const plnToEur = (v) => v / rate();
   const rateText = () => `1 € = ${nf.format(rate())} zł`;
@@ -71,6 +126,7 @@
   const MONTHS_FULL = ['Styczeń', 'Luty', 'Marzec', 'Kwiecień', 'Maj', 'Czerwiec', 'Lipiec', 'Sierpień', 'Wrzesień', 'Październik', 'Listopad', 'Grudzień'];
 
   function fmtDate(iso) {
+    if (!iso) return '';
     const [y, m, d] = iso.split('-');
     return `${d}.${m}.${y}`;
   }
@@ -80,14 +136,8 @@
     return new Date(d.getTime() - off * 60000).toISOString().slice(0, 10);
   }
   function monthKey(iso) { return iso.slice(0, 7); }
-  function monthLabel(key) {
-    const [y, m] = key.split('-');
-    return `${MONTHS[+m - 1]} ${y}`;
-  }
-  function monthLabelFull(key) {
-    const [y, m] = key.split('-');
-    return `${MONTHS_FULL[+m - 1]} ${y}`;
-  }
+  function monthLabel(key) { const [y, m] = key.split('-'); return `${MONTHS[+m - 1]} ${y}`; }
+  function monthLabelFull(key) { const [y, m] = key.split('-'); return `${MONTHS_FULL[+m - 1]} ${y}`; }
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -96,24 +146,25 @@
   }
 
   // ---------- Obliczenia ----------
-  function saldoSzef(list) {
-    const r = { EUR: { in: 0, out: 0 }, PLN: { in: 0, out: 0 } };
+  // Zwraca { in: {EUR,PLN}, out: {EUR,PLN}, cats: { wydatek:{EUR,PLN}, ... }, saldo: {EUR,PLN} }
+  function kasa(list = state.ruchy) {
+    const z = () => ({ EUR: 0, PLN: 0 });
+    const r = { in: z(), out: z(), poza: z(), cats: { wydatek: z(), wyplata: z(), pati: z() }, saldo: z() };
     for (const e of list) {
-      const c = r[e.currency] || (r[e.currency] = { in: 0, out: 0 });
-      if (e.type === 'wplata') c.in += +e.amount; else c.out += +e.amount;
+      const c = e.currency === 'PLN' ? 'PLN' : 'EUR';
+      if (e.kind === 'in') { r.in[c] += +e.amount; continue; }
+      const cat = r.cats[e.cat] || (r.cats[e.cat] = z());
+      cat[c] += +e.amount;
+      if (e.poza) r.poza[c] += +e.amount; else r.out[c] += +e.amount;
     }
+    r.saldo.EUR = r.in.EUR - r.out.EUR;
+    r.saldo.PLN = r.in.PLN - r.out.PLN;
     return r;
   }
-  function sumWyplaty(list) {
-    const r = { EUR: 0, PLN: 0 };
-    for (const e of list) r[e.currency] = (r[e.currency] || 0) + +e.amount;
-    return r;
-  }
-  function saldoPati(list) {
-    let earned = 0, paid = 0;
-    for (const e of list) {
-      if (e.type === 'praca') earned += +e.amount; else paid += +e.amount;
-    }
+  const patiPayments = () => state.ruchy.filter((e) => e.kind === 'out' && e.cat === 'pati');
+  function saldoPati() {
+    const earned = state.praca.reduce((s, e) => s + +e.amount, 0);
+    const paid = patiPayments().reduce((s, e) => s + (e.currency === 'PLN' ? plnToEur(+e.amount) : +e.amount), 0);
     return { earned, paid, due: earned - paid };
   }
 
@@ -125,14 +176,14 @@
   function render() {
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     $fab.hidden = tab === 'wiecej';
-    if (tab === 'szef') renderSzef();
+    if (tab === 'kasa') renderKasa();
     else if (tab === 'wyplata') renderWyplata();
     else if (tab === 'pati') renderPati();
     else renderWiecej();
     $view.scrollTop = 0;
   }
 
-  function chipsHTML(list, which) {
+  function monthChipsHTML(list, which) {
     const months = [...new Set(list.map((e) => monthKey(e.date)))].sort().reverse();
     if (months.length < 2) return '';
     const cur = monthFilter[which];
@@ -141,128 +192,161 @@
       ${months.map((m) => `<button class="chip ${cur === m ? 'active' : ''}" data-month="${m}">${monthLabel(m)}</button>`).join('')}
     </div>`;
   }
-
-  function applyFilter(list, which) {
+  function applyMonth(list, which) {
     const m = monthFilter[which];
     return m === 'all' ? list : list.filter((e) => monthKey(e.date) === m);
   }
 
-  function renderSzef() {
-    $title.textContent = 'Rozliczenia z szefem';
-    const all = state.szef;
-    const s = saldoSzef(all);
-    const eur = s.EUR.in - s.EUR.out;
-    const pln = s.PLN.in - s.PLN.out;
-    const total = eur + plnToEur(pln);
-    const filtered = sortDesc(applyFilter(all, 'szef'));
+  function amtHTML(e) {
+    const plus = e.kind === 'in';
+    const sign = plus ? '+' : '−';
+    const cls = plus ? 'plus' : (e.poza ? 'neutral' : 'minus');
+    return `<div class="amt ${cls}">${sign}${money(e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>`;
+  }
+
+  function ruchItemHTML(e) {
+    const plus = e.kind === 'in';
+    const cat = CATS[e.cat] || CATS.wydatek;
+    const title = e.note || (plus ? 'Od szefa' : cat.one);
+    const sub = plus ? 'dostałem od szefa' : `${cat.icon} ${cat.label}${e.poza ? ' · nie z kasy szefa' : ''}`;
+    return `<button class="item" data-edit="ruch" data-id="${esc(e.id)}">
+      <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
+      <div class="note">${esc(title)}<small>${sub}</small></div>
+      ${amtHTML(e)}
+    </button>`;
+  }
+
+  function pair(v, cls = '') {
+    const parts = [];
+    if (v.EUR) parts.push(money(v.EUR, 'EUR'));
+    if (v.PLN) parts.push(money(v.PLN, 'PLN'));
+    if (!parts.length) return `<span class="muted">—</span>`;
+    return `<span class="${cls}">${parts.join(' + ')}</span>`;
+  }
+
+  function renderKasa() {
+    $title.textContent = 'Kasa od szefa';
+    const all = state.ruchy;
+    const k = kasa(all);
+    const total = k.saldo.EUR + plnToEur(k.saldo.PLN);
+
+    let list = applyMonth(all, 'kasa');
+    if (catFilter === 'in') list = list.filter((e) => e.kind === 'in');
+    else if (catFilter !== 'all') list = list.filter((e) => e.kind === 'out' && e.cat === catFilter);
+    const filtered = sortDesc(list);
 
     let html = `
       <div class="cards">
         <div class="card">
           <div class="label">Zostało €</div>
-          <div class="value ${eur < 0 ? 'neg' : ''}">${money(eur, 'EUR')}</div>
-          <div class="sub">dostałem ${money(s.EUR.in, 'EUR')}<br>wydałem ${money(s.EUR.out, 'EUR')}</div>
+          <div class="value ${k.saldo.EUR < 0 ? 'neg' : ''}">${money(k.saldo.EUR, 'EUR')}</div>
         </div>
         <div class="card">
           <div class="label">Zostało zł</div>
-          <div class="value ${pln < 0 ? 'neg' : ''}">${money(pln, 'PLN')}</div>
-          <div class="sub">dostałem ${money(s.PLN.in, 'PLN')}<br>wydałem ${money(s.PLN.out, 'PLN')}</div>
+          <div class="value ${k.saldo.PLN < 0 ? 'neg' : ''}">${money(k.saldo.PLN, 'PLN')}</div>
         </div>
       </div>
       <div class="cards single">
         <button class="card card-btn" data-action="rate">
-          <div class="label">Razem w € <span class="muted">(${money(pln, 'PLN')} ≈ ${money(plnToEur(pln), 'EUR')})</span></div>
+          <div class="label">Razem w € <span class="muted">(kurs ${rateText()} · dotknij, żeby zmienić)</span></div>
           <div class="value ${total < 0 ? 'neg' : ''}">${money(total, 'EUR')}</div>
-          <div class="sub">kurs ${rateText()} · dotknij, żeby zmienić</div>
         </button>
       </div>
-      ${chipsHTML(all, 'szef')}
+      <div class="cards single">
+        <div class="card breakdown">
+          <div class="brow"><span>Dostałem od szefa</span>${pair(k.in, 'plus')}</div>
+          <div class="brow"><span>${CATS.wydatek.icon} Wydatki</span>${pair(k.cats.wydatek, 'minus')}</div>
+          <div class="brow"><span>${CATS.wyplata.icon} Wypłata</span>${pair(k.cats.wyplata, 'minus')}</div>
+          <div class="brow"><span>${CATS.pati.icon} Pati</span>${pair(k.cats.pati, 'minus')}</div>
+          ${(k.poza.EUR || k.poza.PLN) ? `<div class="brow muted"><span>w tym nie z kasy szefa</span>${pair(k.poza)}</div>` : ''}
+          <div class="brow total"><span>Zostało</span>${pair(k.saldo, k.saldo.EUR < 0 || k.saldo.PLN < 0 ? 'minus' : '')}</div>
+        </div>
+      </div>
+      <div class="chips">
+        ${[['all', 'Wszystko'], ['in', 'Dostałem'], ['wydatek', 'Wydatki'], ['wyplata', 'Wypłata'], ['pati', 'Pati']]
+          .map(([v, l]) => `<button class="chip ${catFilter === v ? 'active' : ''}" data-cat="${v}">${l}</button>`).join('')}
+      </div>
+      ${monthChipsHTML(all, 'kasa')}
     `;
 
     if (!filtered.length) {
-      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać wydatek albo wpłatę.</div>`;
+      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać kasę od szefa albo wpisać, na co poszła.</div>`;
     } else {
-      html += listByMonthHTML(filtered, (e) => {
-        const plus = e.type === 'wplata';
-        return `<button class="item" data-edit="szef" data-id="${esc(e.id)}">
-          <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
-          <div class="note">${esc(e.note) || (plus ? 'Dostałem' : 'Wydatek')}<small>${plus ? 'dostałem' : 'wydałem'}</small></div>
-          <div class="amt ${plus ? 'plus' : 'minus'}">${signed(plus ? e.amount : -e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>
-        </button>`;
-      });
+      html += listByMonthHTML(filtered, ruchItemHTML);
     }
     $view.innerHTML = html;
   }
 
   function renderWyplata() {
     $title.textContent = 'Wypłata';
-    const all = state.wyplata;
-    const total = sumWyplaty(all);
-    const filtered = sortDesc(applyFilter(all, 'wyplata'));
-    const shown = sumWyplaty(filtered);
+    const all = state.ruchy.filter((e) => e.kind === 'out' && e.cat === 'wyplata');
+    const filtered = sortDesc(applyMonth(all, 'wyplata'));
+    const k = kasa(filtered).cats.wyplata;
     const m = monthFilter.wyplata;
-    const label = m === 'all' ? 'Razem wypłacone' : `Wypłacone: ${monthLabelFull(m).toLowerCase()}`;
-    const totalEur = shown.EUR + plnToEur(shown.PLN);
+    const label = m === 'all' ? 'Razem' : monthLabelFull(m);
 
     let html = `
       <div class="cards">
         <div class="card">
           <div class="label">${label} €</div>
-          <div class="value">${money(shown.EUR, 'EUR')}</div>
+          <div class="value">${money(k.EUR, 'EUR')}</div>
         </div>
         <div class="card">
           <div class="label">${label} zł</div>
-          <div class="value">${money(shown.PLN, 'PLN')}</div>
+          <div class="value">${money(k.PLN, 'PLN')}</div>
         </div>
       </div>
       <div class="cards single">
         <div class="card">
           <div class="label">Razem w € <span class="muted">(kurs ${rateText()})</span></div>
-          <div class="value">${money(totalEur, 'EUR')}</div>
-          ${m !== 'all' ? `<div class="sub">łącznie od początku: ${money(total.EUR, 'EUR')} + ${money(total.PLN, 'PLN')}</div>` : `<div class="sub">wypłat: ${all.length}</div>`}
+          <div class="value">${money(k.EUR + plnToEur(k.PLN), 'EUR')}</div>
+          <div class="sub">wypłat: ${filtered.length} · wypłaty schodzą z kasy od szefa</div>
         </div>
       </div>
-      ${chipsHTML(all, 'wyplata')}
+      ${monthChipsHTML(all, 'wyplata')}
     `;
-
     if (!filtered.length) {
-      html += `<div class="empty">Brak wypłat.<br>Dotknij <b>+</b>, żeby dodać wypłatę od szefa i wpisać, za co.</div>`;
+      html += `<div class="empty">Brak wypłat.<br>Dotknij <b>+</b>, żeby dodać wypłatę i wpisać, za co.</div>`;
     } else {
-      html += listByMonthHTML(filtered, (e) => `<button class="item" data-edit="wyplata" data-id="${esc(e.id)}">
-          <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
-          <div class="note">${esc(e.note) || 'Wypłata'}<small>wypłata</small></div>
-          <div class="amt plus">+${money(e.amount, e.currency)}${e.currency === 'PLN' ? `<small>≈ ${money(plnToEur(e.amount), 'EUR')}</small>` : ''}</div>
-        </button>`);
+      html += listByMonthHTML(filtered, ruchItemHTML);
     }
     $view.innerHTML = html;
   }
 
   function renderPati() {
     $title.textContent = 'Pati u Svena';
-    const all = state.pati;
-    const s = saldoPati(all);
-    const filtered = sortDesc(applyFilter(all, 'pati'));
+    const s = saldoPati();
+    const items = [
+      ...state.praca.map((e) => ({ ...e, _t: 'praca' })),
+      ...patiPayments().map((e) => ({ ...e, _t: 'ruch' })),
+    ];
+    const filtered = sortDesc(applyMonth(items, 'pati'));
 
     let html = `
       <div class="cards single">
         <div class="card">
-          <div class="label">Sven jeszcze wisi</div>
-          <div class="value ${s.due > 0 ? 'pos' : ''}">${money(s.due, 'EUR')}</div>
-          <div class="sub">zarobione ${money(s.earned, 'EUR')} · zapłacone ${money(s.paid, 'EUR')} · dni pracy: ${all.filter((e) => e.type === 'praca').length}</div>
+          <div class="label">Sven jeszcze wisi Pati</div>
+          <div class="value ${s.due > 0 ? 'pos' : (s.due < 0 ? 'neg' : '')}">${money(s.due, 'EUR')}</div>
+          <div class="sub">zarobione ${money(s.earned, 'EUR')} · dostała ${money(s.paid, 'EUR')} · dni pracy: ${state.praca.length}</div>
         </div>
       </div>
-      ${chipsHTML(all, 'pati')}
+      ${monthChipsHTML(items, 'pati')}
     `;
-
     if (!filtered.length) {
-      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać dzień pracy albo wypłatę.</div>`;
+      html += `<div class="empty">Brak wpisów.<br>Dotknij <b>+</b>, żeby dodać dzień pracy albo wypłatę dla Pati.</div>`;
     } else {
       html += listByMonthHTML(filtered, (e) => {
-        const praca = e.type === 'praca';
-        return `<button class="item" data-edit="pati" data-id="${esc(e.id)}">
+        if (e._t === 'praca') {
+          return `<button class="item" data-edit="praca" data-id="${esc(e.id)}">
+            <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
+            <div class="note">Praca u Svena${e.note ? `<small>${esc(e.note)}</small>` : '<small>zarobione</small>'}</div>
+            <div class="amt plus">+${money(e.amount, 'EUR')}</div>
+          </button>`;
+        }
+        return `<button class="item" data-edit="ruch" data-id="${esc(e.id)}">
           <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
-          <div class="note">${praca ? 'Praca u Svena' : 'Sven zapłacił'}${e.note ? `<small>${esc(e.note)}</small>` : ''}</div>
-          <div class="amt ${praca ? 'plus' : 'minus'}">${praca ? '+' : '−'}${money(e.amount, 'EUR')}</div>
+          <div class="note">Pati dostała kasę<small>${e.poza ? 'nie z kasy szefa' : 'z kasy szefa'}${e.note && e.note !== 'Wypłata dla Pati' ? ' · ' + esc(e.note) : ''}</small></div>
+          ${amtHTML(e)}
         </button>`;
       });
     }
@@ -321,40 +405,37 @@
   }
 
   // ---------- Podsumowanie tekstowe ----------
+  function pairText(v) {
+    const parts = [];
+    if (v.EUR) parts.push(money(v.EUR, 'EUR'));
+    if (v.PLN) parts.push(money(v.PLN, 'PLN'));
+    return parts.length ? parts.join(' + ') : '—';
+  }
   function summaryText() {
-    const s = saldoSzef(state.szef);
-    const p = saldoPati(state.pati);
+    const k = kasa();
+    const p = saldoPati();
     const lines = [];
     lines.push(`ROZLICZENIE – stan na ${fmtDate(todayISO())}`);
     lines.push('');
-    lines.push(`Dostałem:  ${money(s.EUR.in, 'EUR')}  |  ${money(s.PLN.in, 'PLN')}`);
-    lines.push(`Wydałem:   ${money(s.EUR.out, 'EUR')}  |  ${money(s.PLN.out, 'PLN')}`);
-    const eur = s.EUR.in - s.EUR.out;
-    const pln = s.PLN.in - s.PLN.out;
-    lines.push(`ZOSTAŁO:   ${money(eur, 'EUR')}  |  ${money(pln, 'PLN')}`);
-    lines.push(`Razem ≈ ${money(eur + plnToEur(pln), 'EUR')}  (kurs ${rateText()})`);
+    lines.push(`Dostałem od szefa:  ${pairText(k.in)}`);
+    lines.push(`  Wydatki:          ${pairText(k.cats.wydatek)}`);
+    lines.push(`  Wypłata:          ${pairText(k.cats.wyplata)}`);
+    lines.push(`  Pati:             ${pairText(k.cats.pati)}`);
+    if (k.poza.EUR || k.poza.PLN) lines.push(`  (w tym nie z kasy szefa: ${pairText(k.poza)})`);
+    lines.push(`ZOSTAŁO:            ${money(k.saldo.EUR, 'EUR')}  |  ${money(k.saldo.PLN, 'PLN')}`);
+    lines.push(`Razem ≈ ${money(k.saldo.EUR + plnToEur(k.saldo.PLN), 'EUR')}  (kurs ${rateText()})`);
     lines.push('');
     lines.push('Wpisy:');
-    for (const e of sortDesc(state.szef).reverse()) {
-      const sign = e.type === 'wplata' ? '+' : '−';
-      lines.push(`${fmtDate(e.date)}  ${sign}${money(e.amount, e.currency)}${e.note ? '  ' + e.note : ''}`);
-    }
-    lines.push('');
-    lines.push('WYPŁATY');
-    if (state.wyplata.length) {
-      const w = sumWyplaty(state.wyplata);
-      lines.push(`Razem: ${money(w.EUR, 'EUR')}  |  ${money(w.PLN, 'PLN')}`);
-      for (const e of sortDesc(state.wyplata).reverse()) {
-        lines.push(`${fmtDate(e.date)}  ${money(e.amount, e.currency)}${e.note ? '  ' + e.note : ''}`);
-      }
-    } else {
-      lines.push('(brak)');
+    for (const e of sortDesc(state.ruchy).reverse()) {
+      const sign = e.kind === 'in' ? '+' : '−';
+      const tag = e.kind === 'in' ? 'od szefa' : (CATS[e.cat] ? CATS[e.cat].label : e.cat) + (e.poza ? ' (nie z kasy)' : '');
+      lines.push(`${fmtDate(e.date)}  ${sign}${money(e.amount, e.currency)}  ${tag}${e.note ? '  ' + e.note : ''}`);
     }
     lines.push('');
     lines.push('PATI U SVENA');
-    lines.push(`Zarobione: ${money(p.earned, 'EUR')}, zapłacone: ${money(p.paid, 'EUR')}, do zapłaty: ${money(p.due, 'EUR')}`);
-    for (const e of sortDesc(state.pati).reverse()) {
-      lines.push(`${fmtDate(e.date)}  ${e.type === 'praca' ? 'praca' : 'zapłacone'}  ${money(e.amount, 'EUR')}${e.note ? '  ' + e.note : ''}`);
+    lines.push(`Zarobione: ${money(p.earned, 'EUR')}, dostała: ${money(p.paid, 'EUR')}, do zapłaty: ${money(p.due, 'EUR')}`);
+    for (const e of sortDesc(state.praca).reverse()) {
+      lines.push(`${fmtDate(e.date)}  praca  ${money(e.amount, 'EUR')}${e.note ? '  ' + e.note : ''}`);
     }
     return lines.join('\n');
   }
@@ -370,126 +451,120 @@
   }
 
   // ---------- Dialogi ----------
-  const dlgSzef = document.getElementById('dlg-szef');
-  const formSzef = document.getElementById('form-szef');
-  const dlgWyplata = document.getElementById('dlg-wyplata');
-  const formWyplata = document.getElementById('form-wyplata');
-  const dlgPati = document.getElementById('dlg-pati');
-  const formPati = document.getElementById('form-pati');
+  const dlgRuch = document.getElementById('dlg-ruch');
+  const formRuch = document.getElementById('form-ruch');
+  const dlgPraca = document.getElementById('dlg-praca');
+  const formPraca = document.getElementById('form-praca');
+  const dlgPatiWybor = document.getElementById('dlg-pati-wybor');
 
-  function openSzef(entry) {
-    formSzef.reset();
-    formSzef.id.value = entry ? entry.id : '';
-    formSzef.type.value = entry ? entry.type : 'wydatek';
-    formSzef.date.value = entry ? entry.date : todayISO();
-    formSzef.amount.value = entry ? entry.amount : '';
-    formSzef.currency.value = entry ? entry.currency : 'EUR';
-    formSzef.note.value = entry ? entry.note : '';
-    document.getElementById('dlg-szef-title').textContent = entry ? 'Edytuj wpis' : 'Nowy wpis';
-    document.getElementById('btn-szef-delete').hidden = !entry;
-    dlgSzef.showModal();
-    if (!entry) setTimeout(() => formSzef.amount.focus(), 50);
+  const NOTE_PLACEHOLDER = {
+    in: 'np. zaliczka, na materiały…',
+    wydatek: 'np. paliwo, materiały…',
+    wyplata: 'np. wypłata za wrzesień, premia…',
+    pati: 'np. za sierpień…',
+  };
+
+  function syncRuchForm() {
+    const out = formRuch.kind.value === 'out';
+    formRuch.classList.toggle('is-in', !out);
+    const key = out ? formRuch.cat.value : 'in';
+    formRuch.note.placeholder = NOTE_PLACEHOLDER[key] || '';
+    document.getElementById('note-label').textContent = out ? (key === 'wydatek' ? 'Na co dokładnie' : 'Za co / opis') : 'Opis (opcjonalnie)';
   }
 
-  function openWyplata(entry) {
-    formWyplata.reset();
-    formWyplata.id.value = entry ? entry.id : '';
-    formWyplata.date.value = entry ? entry.date : todayISO();
-    formWyplata.amount.value = entry ? entry.amount : '';
-    formWyplata.currency.value = entry ? entry.currency : 'EUR';
-    formWyplata.note.value = entry ? entry.note : '';
-    document.getElementById('dlg-wyplata-title').textContent = entry ? 'Edytuj wypłatę' : 'Nowa wypłata';
-    document.getElementById('btn-wyplata-delete').hidden = !entry;
-    dlgWyplata.showModal();
-    if (!entry) setTimeout(() => formWyplata.amount.focus(), 50);
+  // preset: { kind, cat }
+  function openRuch(entry, preset = {}) {
+    formRuch.reset();
+    formRuch.id.value = entry ? entry.id : '';
+    formRuch.kind.value = entry ? entry.kind : (preset.kind || 'out');
+    formRuch.cat.value = entry ? (entry.cat || 'wydatek') : (preset.cat || 'wydatek');
+    formRuch.date.value = entry ? entry.date : todayISO();
+    formRuch.amount.value = entry ? entry.amount : '';
+    formRuch.currency.value = entry ? entry.currency : 'EUR';
+    formRuch.note.value = entry ? entry.note : '';
+    formRuch.poza.checked = !!(entry && entry.poza);
+    document.getElementById('dlg-ruch-title').textContent = entry ? 'Edytuj wpis' : 'Nowy wpis';
+    document.getElementById('btn-ruch-delete').hidden = !entry;
+    syncRuchForm();
+    dlgRuch.showModal();
+    if (!entry) setTimeout(() => formRuch.amount.focus(), 50);
   }
 
-  function openPati(entry) {
-    formPati.reset();
-    formPati.id.value = entry ? entry.id : '';
-    formPati.type.value = entry ? entry.type : 'praca';
-    formPati.date.value = entry ? entry.date : todayISO();
-    formPati.amount.value = entry ? entry.amount : 100;
-    formPati.note.value = entry ? entry.note : '';
-    document.getElementById('dlg-pati-title').textContent = entry ? 'Edytuj wpis' : 'Nowy wpis';
-    document.getElementById('btn-pati-delete').hidden = !entry;
-    dlgPati.showModal();
+  function openPraca(entry) {
+    formPraca.reset();
+    formPraca.id.value = entry ? entry.id : '';
+    formPraca.date.value = entry ? entry.date : todayISO();
+    formPraca.amount.value = entry ? entry.amount : 100;
+    formPraca.note.value = entry ? entry.note : '';
+    document.getElementById('dlg-praca-title').textContent = entry ? 'Edytuj dzień pracy' : 'Praca u Svena';
+    document.getElementById('btn-praca-delete').hidden = !entry;
+    dlgPraca.showModal();
   }
 
-  formSzef.addEventListener('submit', (ev) => {
+  formRuch.addEventListener('change', (ev) => {
+    if (ev.target.name === 'kind' || ev.target.name === 'cat') syncRuchForm();
+  });
+
+  formRuch.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    const amount = parseFloat(String(formSzef.amount.value).replace(',', '.'));
+    const amount = parseFloat(String(formRuch.amount.value).replace(',', '.'));
     if (!(amount >= 0)) return;
+    const kind = formRuch.kind.value;
     const entry = {
-      id: formSzef.id.value || uid(),
-      type: formSzef.type.value,
-      date: formSzef.date.value,
+      id: formRuch.id.value || uid(),
+      kind,
+      date: formRuch.date.value,
       amount: Math.round(amount * 100) / 100,
-      currency: formSzef.currency.value,
-      note: formSzef.note.value.trim(),
+      currency: formRuch.currency.value,
+      cat: kind === 'out' ? formRuch.cat.value : null,
+      note: formRuch.note.value.trim(),
     };
-    upsert(state.szef, entry);
-    save(); dlgSzef.close(); render();
+    if (kind === 'out' && formRuch.poza.checked) entry.poza = true;
+    upsert(state.ruchy, entry);
+    save(); dlgRuch.close(); render();
     toast('Zapisano');
   });
 
-  formWyplata.addEventListener('submit', (ev) => {
+  formPraca.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    const amount = parseFloat(String(formWyplata.amount.value).replace(',', '.'));
+    const amount = parseFloat(String(formPraca.amount.value).replace(',', '.'));
     if (!(amount >= 0)) return;
     const entry = {
-      id: formWyplata.id.value || uid(),
-      date: formWyplata.date.value,
+      id: formPraca.id.value || uid(),
+      date: formPraca.date.value,
       amount: Math.round(amount * 100) / 100,
-      currency: formWyplata.currency.value,
-      note: formWyplata.note.value.trim(),
+      note: formPraca.note.value.trim(),
     };
-    upsert(state.wyplata, entry);
-    save(); dlgWyplata.close(); render();
+    upsert(state.praca, entry);
+    save(); dlgPraca.close(); render();
     toast('Zapisano');
   });
 
-  formPati.addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    const amount = parseFloat(String(formPati.amount.value).replace(',', '.'));
-    if (!(amount >= 0)) return;
-    const entry = {
-      id: formPati.id.value || uid(),
-      type: formPati.type.value,
-      date: formPati.date.value,
-      amount: Math.round(amount * 100) / 100,
-      note: formPati.note.value.trim(),
-    };
-    upsert(state.pati, entry);
-    save(); dlgPati.close(); render();
-    toast('Zapisano');
-  });
-
-  document.getElementById('btn-szef-delete').addEventListener('click', () => {
+  document.getElementById('btn-ruch-delete').addEventListener('click', () => {
     if (!confirm('Usunąć ten wpis?')) return;
-    state.szef = state.szef.filter((e) => e.id !== formSzef.id.value);
-    save(); dlgSzef.close(); render();
+    state.ruchy = state.ruchy.filter((e) => e.id !== formRuch.id.value);
+    save(); dlgRuch.close(); render();
     toast('Usunięto');
   });
-  document.getElementById('btn-wyplata-delete').addEventListener('click', () => {
-    if (!confirm('Usunąć tę wypłatę?')) return;
-    state.wyplata = state.wyplata.filter((e) => e.id !== formWyplata.id.value);
-    save(); dlgWyplata.close(); render();
-    toast('Usunięto');
-  });
-  document.getElementById('btn-pati-delete').addEventListener('click', () => {
-    if (!confirm('Usunąć ten wpis?')) return;
-    state.pati = state.pati.filter((e) => e.id !== formPati.id.value);
-    save(); dlgPati.close(); render();
+  document.getElementById('btn-praca-delete').addEventListener('click', () => {
+    if (!confirm('Usunąć ten dzień pracy?')) return;
+    state.praca = state.praca.filter((e) => e.id !== formPraca.id.value);
+    save(); dlgPraca.close(); render();
     toast('Usunięto');
   });
 
   document.querySelectorAll('[data-close]').forEach((b) => {
     b.addEventListener('click', () => b.closest('dialog').close());
   });
-  // zamykanie po kliknięciu w tło
-  [dlgSzef, dlgWyplata, dlgPati].forEach((d) => {
+  [dlgRuch, dlgPraca, dlgPatiWybor].forEach((d) => {
     d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
+  });
+  dlgPatiWybor.querySelectorAll('[data-pati-add]').forEach((b) => {
+    b.addEventListener('click', () => {
+      dlgPatiWybor.close();
+      if (b.dataset.patiAdd === 'praca') openPraca(null);
+      else openRuch(null, { kind: 'out', cat: 'pati' });
+    });
   });
 
   function upsert(list, entry) {
@@ -503,23 +578,30 @@
   });
 
   $fab.addEventListener('click', () => {
-    if (tab === 'szef') openSzef(null);
-    else if (tab === 'wyplata') openWyplata(null);
-    else if (tab === 'pati') openPati(null);
+    if (tab === 'kasa') openRuch(null, { kind: catFilter === 'in' ? 'in' : 'out', cat: ['wydatek', 'wyplata', 'pati'].includes(catFilter) ? catFilter : 'wydatek' });
+    else if (tab === 'wyplata') openRuch(null, { kind: 'out', cat: 'wyplata' });
+    else if (tab === 'pati') dlgPatiWybor.showModal();
   });
 
   $view.addEventListener('click', (ev) => {
     const chip = ev.target.closest('.chip');
-    if (chip) { monthFilter[tab] = chip.dataset.month; render(); return; }
+    if (chip) {
+      if (chip.dataset.month) monthFilter[tab] = chip.dataset.month;
+      if (chip.dataset.cat) catFilter = chip.dataset.cat;
+      render();
+      return;
+    }
 
     const item = ev.target.closest('[data-edit]');
     if (item) {
       const which = item.dataset.edit;
-      const entry = state[which].find((e) => e.id === item.dataset.id);
-      if (!entry) return;
-      if (which === 'szef') openSzef(entry);
-      else if (which === 'wyplata') openWyplata(entry);
-      else openPati(entry);
+      if (which === 'ruch') {
+        const entry = state.ruchy.find((e) => e.id === item.dataset.id);
+        if (entry) openRuch(entry);
+      } else if (which === 'praca') {
+        const entry = state.praca.find((e) => e.id === item.dataset.id);
+        if (entry) openPraca(entry);
+      }
       return;
     }
 
@@ -564,7 +646,7 @@
     } else if (action === 'reset') {
       if (!confirm('Na pewno usunąć WSZYSTKIE dane? Tej operacji nie da się cofnąć.')) return;
       if (!confirm('Ostatni raz: usunąć wszystko?')) return;
-      state = { version: 1, settings: { rate: rate() }, szef: [], wyplata: [], pati: [] };
+      state = { version: VERSION, settings: { rate: rate() }, ruchy: [], praca: [] };
       save(); render();
       toast('Dane wyczyszczone');
     }
@@ -588,11 +670,10 @@
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      if (!parsed || !Array.isArray(parsed.szef) || !Array.isArray(parsed.pati)) throw new Error('zły format');
-      const wyplata = Array.isArray(parsed.wyplata) ? parsed.wyplata : [];
-      if (!confirm(`Wczytać ${parsed.szef.length} wpisów rozliczeń, ${wyplata.length} wypłat i ${parsed.pati.length} wpisów Pati? Obecne dane zostaną zastąpione.`)) return;
-      const r = parsed.settings && parsed.settings.rate > 0 ? parsed.settings.rate : rate();
-      state = { version: 1, settings: { rate: r }, szef: parsed.szef, wyplata, pati: parsed.pati };
+      const migrated = migrate(parsed);
+      if (!migrated) throw new Error('zły format');
+      if (!confirm(`Wczytać ${migrated.ruchy.length} wpisów kasy i ${migrated.praca.length} dni pracy Pati? Obecne dane zostaną zastąpione.`)) return;
+      state = migrated;
       save(); render();
       toast('Dane wczytane');
     } catch (e) {

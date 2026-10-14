@@ -188,6 +188,24 @@ main {
 }
 .amt.plus { color: var(--plus); }
 .amt.minus { color: var(--minus); }
+.amt.neutral { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(128,128,128,.5); }
+
+/* Karta podziału kasy */
+.breakdown { padding: 6px 14px; }
+.brow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.brow:last-child { border-bottom: 0; }
+.brow.total { font-weight: 700; border-top: 2px solid var(--line); }
+.brow .plus { color: var(--plus); }
+.brow .minus { color: var(--minus); }
+.brow.muted { color: var(--muted); font-size: 13px; }
 
 .empty {
   text-align: center;
@@ -305,6 +323,22 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
   font-weight: 600;
   box-shadow: 0 1px 3px rgba(0,0,0,.12);
 }
+
+.seg.cats span { font-size: 14px; padding: 8px 4px; }
+form.is-in .only-out { display: none; }
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 15px;
+  line-height: 1.3;
+}
+.check input { width: 22px; height: 22px; margin: 0; flex: none; accent-color: var(--accent); }
+.check small { display: block; color: var(--muted); font-size: 12px; }
+
+.menu-form { gap: 10px; }
+.menu-form h2 { margin-bottom: 6px; }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field > span { font-size: 13px; color: var(--muted); }

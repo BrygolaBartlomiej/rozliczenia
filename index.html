@@ -25,8 +25,8 @@
   <button id="fab" class="fab" aria-label="Dodaj">+</button>
 
   <nav class="tabbar">
-    <button class="tab active" data-tab="szef">
-      <span class="tab-icon">💶</span><span>Szef</span>
+    <button class="tab active" data-tab="kasa">
+      <span class="tab-icon">💶</span><span>Kasa</span>
     </button>
     <button class="tab" data-tab="wyplata">
       <span class="tab-icon">💰</span><span>Wypłata</span>
@@ -39,14 +39,22 @@
     </button>
   </nav>
 
-  <!-- Formularz: szef -->
-  <dialog id="dlg-szef">
-    <form method="dialog" id="form-szef">
-      <h2 id="dlg-szef-title">Nowy wpis</h2>
+  <!-- Formularz: ruch kasy (dostałem / wydałem) -->
+  <dialog id="dlg-ruch">
+    <form method="dialog" id="form-ruch">
+      <h2 id="dlg-ruch-title">Nowy wpis</h2>
       <input type="hidden" name="id">
       <div class="seg" role="radiogroup">
-        <label><input type="radio" name="type" value="wydatek" checked><span>Wydałem</span></label>
-        <label><input type="radio" name="type" value="wplata"><span>Dostałem</span></label>
+        <label><input type="radio" name="kind" value="in"><span>Dostałem od szefa</span></label>
+        <label><input type="radio" name="kind" value="out" checked><span>Poszło na…</span></label>
+      </div>
+      <div class="field only-out" id="cat-field">
+        <span>Na co</span>
+        <div class="seg cats" role="radiogroup">
+          <label><input type="radio" name="cat" value="wydatek" checked><span>Wydatki</span></label>
+          <label><input type="radio" name="cat" value="wyplata"><span>Wypłata</span></label>
+          <label><input type="radio" name="cat" value="pati"><span>Pati</span></label>
+        </div>
       </div>
       <label class="field">
         <span>Data</span>
@@ -66,11 +74,15 @@
         </label>
       </div>
       <label class="field">
-        <span>Na co / uwagi</span>
+        <span id="note-label">Opis</span>
         <input type="text" name="note" placeholder="np. paliwo, materiały…" autocomplete="off">
       </label>
+      <label class="check only-out">
+        <input type="checkbox" name="poza">
+        <span>Nie z kasy szefa <small>(z własnej kieszeni – nie odejmuje od salda)</small></span>
+      </label>
       <div class="actions">
-        <button type="button" class="btn danger" id="btn-szef-delete" hidden>Usuń</button>
+        <button type="button" class="btn danger" id="btn-ruch-delete" hidden>Usuń</button>
         <span class="grow"></span>
         <button type="button" class="btn" data-close>Anuluj</button>
         <button type="submit" class="btn primary">Zapisz</button>
@@ -78,56 +90,17 @@
     </form>
   </dialog>
 
-  <!-- Formularz: Wypłata -->
-  <dialog id="dlg-wyplata">
-    <form method="dialog" id="form-wyplata">
-      <h2 id="dlg-wyplata-title">Nowa wypłata</h2>
+  <!-- Formularz: Pati – dzień pracy -->
+  <dialog id="dlg-praca">
+    <form method="dialog" id="form-praca">
+      <h2 id="dlg-praca-title">Praca u Svena</h2>
       <input type="hidden" name="id">
       <label class="field">
         <span>Data</span>
         <input type="date" name="date" required>
       </label>
-      <div class="row">
-        <label class="field grow">
-          <span>Kwota</span>
-          <input type="number" name="amount" inputmode="decimal" step="0.01" min="0" placeholder="0,00" required>
-        </label>
-        <label class="field">
-          <span>Waluta</span>
-          <select name="currency">
-            <option value="EUR">€</option>
-            <option value="PLN">zł</option>
-          </select>
-        </label>
-      </div>
       <label class="field">
-        <span>Za co / opis</span>
-        <input type="text" name="note" placeholder="np. wypłata za wrzesień, premia, zaliczka…" autocomplete="off">
-      </label>
-      <div class="actions">
-        <button type="button" class="btn danger" id="btn-wyplata-delete" hidden>Usuń</button>
-        <span class="grow"></span>
-        <button type="button" class="btn" data-close>Anuluj</button>
-        <button type="submit" class="btn primary">Zapisz</button>
-      </div>
-    </form>
-  </dialog>
-
-  <!-- Formularz: Pati -->
-  <dialog id="dlg-pati">
-    <form method="dialog" id="form-pati">
-      <h2 id="dlg-pati-title">Nowy wpis</h2>
-      <input type="hidden" name="id">
-      <div class="seg" role="radiogroup">
-        <label><input type="radio" name="type" value="praca" checked><span>Praca u Svena</span></label>
-        <label><input type="radio" name="type" value="wyplata"><span>Sven zapłacił</span></label>
-      </div>
-      <label class="field">
-        <span>Data</span>
-        <input type="date" name="date" required>
-      </label>
-      <label class="field">
-        <span>Kwota (€)</span>
+        <span>Zarobione (€)</span>
         <input type="number" name="amount" inputmode="decimal" step="0.01" min="0" placeholder="100" required>
       </label>
       <label class="field">
@@ -135,10 +108,23 @@
         <input type="text" name="note" placeholder="opcjonalnie" autocomplete="off">
       </label>
       <div class="actions">
-        <button type="button" class="btn danger" id="btn-pati-delete" hidden>Usuń</button>
+        <button type="button" class="btn danger" id="btn-praca-delete" hidden>Usuń</button>
         <span class="grow"></span>
         <button type="button" class="btn" data-close>Anuluj</button>
         <button type="submit" class="btn primary">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Wybór: co dodać w zakładce Pati -->
+  <dialog id="dlg-pati-wybor">
+    <form method="dialog" class="menu-form">
+      <h2>Co dodać?</h2>
+      <button type="button" class="btn block" data-pati-add="praca"><span>Dzień pracy u Svena</span><span>🛠️</span></button>
+      <button type="button" class="btn block" data-pati-add="wyplata"><span>Pati dostała kasę (z kasy szefa)</span><span>💶</span></button>
+      <div class="actions">
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Anuluj</button>
       </div>
     </form>
   </dialog>
