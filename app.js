@@ -269,13 +269,6 @@
     }
 
     let html = `
-      <div class="howto">
-        <ol>
-          <li><b>Szef dał mi</b> — wpisujesz kasę i od razu mówisz, co to: na wydatki, Twoja wypłata albo dla Pati.</li>
-          <li><b>Wydałem</b> — tylko zakupy z kasy na wydatki (paliwo, materiały…).</li>
-        </ol>
-        <p class="muted" style="margin:8px 0 0">Wypłata i kasa dla Pati są na swoich kartach na dole. Nie odejmują się tu od „Zostało”.</p>
-      </div>
       <div class="cards single">
         <button class="card card-btn" data-action="rate">
           <div class="label">Zostało</div>
