@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=9">
+  <link rel="stylesheet" href="styles.css?v=10">
 </head>
 <body>
   <header class="topbar">
@@ -144,9 +144,40 @@
     </form>
   </dialog>
 
+  <!-- Synchronizacja -->
+  <dialog id="dlg-sync">
+    <form method="dialog" id="form-sync">
+      <h2 id="dlg-sync-title">Te same dane wszędzie</h2>
+      <p class="hint" id="dlg-sync-hint">Wymyśl hasło i wpisz je na każdym telefonie i komputerze. Bez hasła nikt nie odczyta Twoich wpisów.</p>
+      <label class="field">
+        <span>Hasło synchronizacji</span>
+        <input type="password" name="password" minlength="6" autocomplete="new-password" placeholder="min. 6 znaków">
+      </label>
+      <label class="field" id="sync-password2-wrap">
+        <span>Powtórz hasło</span>
+        <input type="password" name="password2" minlength="6" autocomplete="new-password">
+      </label>
+      <div id="sync-token-wrap" hidden>
+        <p class="hint">Jeszcze jeden raz, tylko na <b>tym</b> urządzeniu: GitHub musi pozwolić apce zapisywać kopię.</p>
+        <a class="btn block" id="sync-token-link" href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Rozliczenia" target="_blank" rel="noopener">
+          <span>1. Otwórz GitHub i kliknij zielone Generate token</span><span>↗</span>
+        </a>
+        <label class="field">
+          <span>2. Wklej wygenerowany klucz</span>
+          <input type="text" name="token" autocomplete="off" placeholder="ghp_…">
+        </label>
+      </div>
+      <div class="actions">
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Anuluj</button>
+        <button type="submit" class="btn primary" id="dlg-sync-ok">Włącz</button>
+      </div>
+    </form>
+  </dialog>
+
   <input type="file" id="file-import" accept="application/json,.json" hidden>
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

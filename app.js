@@ -13,8 +13,12 @@
   'use strict';
 
   const STORAGE_KEY = 'rozliczenia.v1';
+  const SYNC_KEY = 'rozliczenia.sync';
   const VERSION = 3;
   const DEFAULT_RATE = 4.2; // ile zł za 1 € (1429 zł → 340,24 € w arkuszu)
+  const GIST_ID = '0767aa98411befb5079087083df67a9e';
+  const GIST_FILE = 'rozliczenia-sync.json';
+  const GIST_RAW = `https://gist.githubusercontent.com/BrygolaBartlomiej/${GIST_ID}/raw/${GIST_FILE}`;
 
   const CEL = {
     wydatki: { label: 'na wydatki' },
@@ -44,6 +48,15 @@
   };
 
   // ---------- Stan ----------
+  let cloudReady = false;
+  let lastSyncAt = 0;
+  let lastSyncError = '';
+  let pushing = false;
+  let syncInfo = { password: '', token: '' };
+  try {
+    const rawSync = localStorage.getItem(SYNC_KEY);
+    if (rawSync) syncInfo = JSON.parse(rawSync);
+  } catch (e) { /* ignore */ }
   let state = load();
   let tab = 'kasa';
   let monthFilter = { kasa: 'all', wyplata: 'all', pati: 'all' };
@@ -132,7 +145,180 @@
   }
 
   function save(s = state) {
+    s.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    if (cloudReady) schedulePush();
+  }
+
+  function loadSync() {
+    try {
+      const raw = localStorage.getItem(SYNC_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) { /* ignore */ }
+    return { password: '', token: '' };
+  }
+  function saveSync() {
+    localStorage.setItem(SYNC_KEY, JSON.stringify({ password: syncInfo.password || '', token: syncInfo.token || '' }));
+  }
+  const syncOn = () => !!(syncInfo && syncInfo.password);
+
+  // ---------- Chmura (zaszyfrowany gist na Twoim GitHubie) ----------
+  function b64enc(u8) {
+    let s = '';
+    for (const b of u8) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+  function b64dec(str) {
+    const bin = atob(str);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+  async function deriveKey(password, salt) {
+    const raw = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: 120000, hash: 'SHA-256' },
+      raw,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+  async function encryptPayload(password, obj) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(password, salt);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+    return { v: 1, s: b64enc(salt), i: b64enc(iv), c: b64enc(new Uint8Array(ct)) };
+  }
+  async function decryptPayload(password, blob) {
+    if (!blob || !blob.c) return null;
+    const key = await deriveKey(password, b64dec(blob.s));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64dec(blob.i) }, key, b64dec(blob.c));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }
+  function mergeState(local, remote) {
+    if (!remote) return local;
+    if (!local) return remote;
+    const removed = { ...(remote.removed || {}), ...(local.removed || {}) };
+    const mergeList = (a, b) => {
+      const m = new Map();
+      for (const e of [...(b || []), ...(a || [])]) {
+        if (!e || !e.id) continue;
+        const rem = removed[e.id];
+        if (rem && (!e.updatedAt || e.updatedAt <= rem)) continue;
+        const prev = m.get(e.id);
+        if (!prev || (e.updatedAt || 0) >= (prev.updatedAt || 0)) m.set(e.id, e);
+      }
+      return [...m.values()];
+    };
+    const settings = (local.updatedAt || 0) >= (remote.updatedAt || 0) ? local.settings : remote.settings;
+    return {
+      version: VERSION,
+      settings: settings || { rate: DEFAULT_RATE },
+      ruchy: mergeList(local.ruchy, remote.ruchy),
+      praca: mergeList(local.praca, remote.praca),
+      removed,
+      updatedAt: Math.max(local.updatedAt || 0, remote.updatedAt || 0),
+    };
+  }
+  function payloadOf(s) {
+    return {
+      version: VERSION,
+      settings: s.settings,
+      ruchy: s.ruchy,
+      praca: s.praca,
+      removed: s.removed || {},
+      updatedAt: s.updatedAt || Date.now(),
+      gistToken: syncInfo.token || '',
+    };
+  }
+  async function cloudPull() {
+    if (!syncOn()) return;
+    let text = '';
+    try {
+      const raw = await fetch(`${GIST_RAW}?t=${Date.now()}`, { cache: 'no-store' });
+      if (raw.ok) text = await raw.text();
+      else if (syncInfo.token) {
+        const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+          headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${syncInfo.token}` },
+        });
+        if (!res.ok) throw new Error('odczyt ' + res.status);
+        const g = await res.json();
+        text = (g.files && g.files[GIST_FILE] && g.files[GIST_FILE].content) || '';
+      } else if (raw.status === 404) return;
+      else throw new Error('odczyt ' + raw.status);
+    } catch (e) {
+      if (syncInfo.token) throw e;
+      return;
+    }
+    text = (text || '').trim();
+    if (!text || text === '{"v":1,"blob":""}') return;
+    let blob;
+    try { blob = JSON.parse(text); } catch (e) { return; }
+    let remote;
+    try {
+      remote = await decryptPayload(syncInfo.password, blob);
+    } catch (e) {
+      throw new Error('złe hasło');
+    }
+    if (!remote) throw new Error('złe hasło');
+    if (remote.gistToken && !syncInfo.token) {
+      syncInfo.token = remote.gistToken;
+      saveSync();
+    }
+    const merged = mergeState(state, remote);
+    state = merged;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    lastSyncAt = Date.now();
+    lastSyncError = '';
+  }
+  async function cloudPush() {
+    if (!syncOn() || !syncInfo.token || pushing) return;
+    pushing = true;
+    try {
+      const enc = await encryptPayload(syncInfo.password, payloadOf(state));
+      const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+        method: 'PATCH',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${syncInfo.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(enc) } } }),
+      });
+      if (res.status === 401 || res.status === 403) throw new Error('klucz GitHub nieważny');
+      if (!res.ok) throw new Error('zapis ' + res.status);
+      lastSyncAt = Date.now();
+      lastSyncError = '';
+    } finally {
+      pushing = false;
+    }
+  }
+  let pushTimer;
+  function schedulePush() {
+    if (!syncOn() || !syncInfo.token) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      cloudPush().catch((e) => { lastSyncError = e.message || 'błąd zapisu'; });
+    }, 800);
+  }
+  async function startCloud() {
+    if (!syncOn()) { cloudReady = true; return; }
+    try {
+      await cloudPull();
+    } catch (e) {
+      lastSyncError = e.message || 'błąd odczytu';
+    }
+    cloudReady = true;
+    if (syncInfo.token) {
+      try { await cloudPush(); } catch (e) { lastSyncError = e.message || 'błąd zapisu'; }
+    }
+    render();
+    setInterval(() => {
+      if (!syncOn() || document.hidden) return;
+      cloudPull().then(() => render()).catch((e) => { lastSyncError = e.message || 'błąd odczytu'; });
+    }, 25000);
   }
 
   function uid() {
@@ -381,7 +567,24 @@
   function renderWiecej() {
     $title.textContent = 'Więcej';
     const canShare = !!navigator.share;
+    const connected = syncOn();
+    const syncStatus = !connected
+      ? 'Wyłączona – dane tylko na tym urządzeniu'
+      : lastSyncError
+        ? `Problem: ${lastSyncError}`
+        : lastSyncAt
+          ? `Połączono · ${fmtDate(todayISO())} ${new Date(lastSyncAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
+          : 'Połączono · czekam na sieć';
     $view.innerHTML = `
+      <div class="section-title"><span>Wszystkie urządzenia</span></div>
+      <p class="hint">${connected ? 'To samo hasło wpisz na telefonie, komputerze i tablecie – wpisy same się zsynchronizują.' : 'Włącz, żeby mieć te same rozliczenia na telefonie i komputerze.'}</p>
+      <div class="menu">
+        ${connected
+          ? `<button class="btn block" data-action="sync-now"><span>${esc(syncStatus)}</span><span>🔄</span></button>
+             <button class="btn block danger" data-action="sync-off"><span>Wyłącz synchronizację na tym urządzeniu</span></button>`
+          : `<button class="btn block" data-action="sync-on"><span>Włącz synchronizację</span><span>☁️</span></button>`}
+      </div>
+
       <div class="section-title"><span>Ustawienia</span></div>
       <div class="list">
         <label class="item setting">
@@ -406,7 +609,7 @@
       </div>
 
       <div class="section-title"><span>Kopia zapasowa</span></div>
-      <p class="hint">Dane są zapisane tylko na tym telefonie. Co jakiś czas zrób eksport i zapisz plik np. w iCloud / Plikach.</p>
+      <p class="hint">${connected ? 'Kopia w chmurze jest zaszyfrowana hasłem. Na wszelki wypadek możesz też zapisać plik u siebie.' : 'Bez synchronizacji dane są tylko na tym urządzeniu. Co jakiś czas zrób eksport.'}</p>
       <div class="menu">
         <button class="btn block" data-action="export"><span>Eksportuj dane (plik JSON)</span><span>💾</span></button>
         <button class="btn block" data-action="import"><span>Wczytaj dane z pliku</span><span>📂</span></button>
@@ -478,6 +681,8 @@
   const formPraca = document.getElementById('form-praca');
   const dlgKasaWybor = document.getElementById('dlg-kasa-wybor');
   const dlgPatiWybor = document.getElementById('dlg-pati-wybor');
+  const dlgSync = document.getElementById('dlg-sync');
+  const formSync = document.getElementById('form-sync');
 
   const NOTE_PLACEHOLDER = {
     out: 'np. paliwo, materiały…',
@@ -555,6 +760,67 @@
     toast('Zapisano');
   });
 
+  let syncNeedToken = false;
+  function openSyncDlg() {
+    formSync.reset();
+    syncNeedToken = false;
+    document.getElementById('sync-token-wrap').hidden = true;
+    document.getElementById('sync-password2-wrap').hidden = false;
+    document.getElementById('dlg-sync-ok').textContent = 'Dalej';
+    dlgSync.showModal();
+    setTimeout(() => formSync.password.focus(), 50);
+  }
+  formSync.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const p = formSync.password.value;
+    if (p.length < 6) { toast('Hasło min. 6 znaków'); return; }
+    if (!syncNeedToken && p !== formSync.password2.value) { toast('Hasła nie są takie same'); return; }
+    const okBtn = document.getElementById('dlg-sync-ok');
+    okBtn.disabled = true;
+    try {
+      if (!syncNeedToken) {
+        syncInfo = { password: p, token: syncInfo.token || '' };
+        try {
+          await cloudPull();
+          if (syncInfo.token) {
+            saveSync();
+            cloudReady = true;
+            dlgSync.close();
+            render();
+            toast('Połączono – dane jak na innych urządzeniach');
+            cloudPush().catch(() => {});
+            return;
+          }
+        } catch (e) {
+          if (/złe hasło/.test(e.message || '')) { toast('Złe hasło'); return; }
+        }
+        syncNeedToken = true;
+        document.getElementById('sync-token-wrap').hidden = false;
+        document.getElementById('sync-password2-wrap').hidden = true;
+        okBtn.textContent = 'Połącz';
+        toast('Jeszcze jeden krok, tylko na tym urządzeniu');
+        return;
+      }
+      const token = formSync.token.value.trim();
+      if (!/^(ghp_|gho_|github_pat_)/.test(token)) {
+        toast('Wklej klucz z GitHuba (zaczyna się od ghp_)');
+        return;
+      }
+      syncInfo = { password: p, token };
+      saveSync();
+      cloudReady = true;
+      await cloudPull();
+      await cloudPush();
+      dlgSync.close();
+      render();
+      toast('Synchronizacja włączona');
+    } catch (e) {
+      toast(e.message || 'Nie udało się połączyć');
+    } finally {
+      okBtn.disabled = false;
+    }
+  });
+
   formPraca.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const amount = parseFloat(String(formPraca.amount.value).replace(',', '.'));
@@ -572,13 +838,13 @@
 
   document.getElementById('btn-ruch-delete').addEventListener('click', () => {
     if (!confirm('Usunąć ten wpis?')) return;
-    state.ruchy = state.ruchy.filter((e) => e.id !== formRuch.id.value);
+    removeEntry('ruchy', formRuch.id.value);
     save(); dlgRuch.close(); render();
     toast('Usunięto');
   });
   document.getElementById('btn-praca-delete').addEventListener('click', () => {
     if (!confirm('Usunąć ten dzień pracy?')) return;
-    state.praca = state.praca.filter((e) => e.id !== formPraca.id.value);
+    removeEntry('praca', formPraca.id.value);
     save(); dlgPraca.close(); render();
     toast('Usunięto');
   });
@@ -586,7 +852,7 @@
   document.querySelectorAll('[data-close]').forEach((b) => {
     b.addEventListener('click', () => b.closest('dialog').close());
   });
-  [dlgRuch, dlgPraca, dlgKasaWybor, dlgPatiWybor].forEach((d) => {
+  [dlgRuch, dlgPraca, dlgKasaWybor, dlgPatiWybor, dlgSync].forEach((d) => {
     d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
   });
   dlgKasaWybor.querySelectorAll('[data-kasa-add]').forEach((b) => {
@@ -605,8 +871,14 @@
   });
 
   function upsert(list, entry) {
+    entry.updatedAt = Date.now();
     const i = list.findIndex((e) => e.id === entry.id);
     if (i >= 0) list[i] = entry; else list.push(entry);
+  }
+  function removeEntry(kind, id) {
+    state.removed = state.removed || {};
+    state.removed[id] = Date.now();
+    state[kind] = state[kind].filter((e) => e.id !== id);
   }
 
   // ---------- Zdarzenia ----------
@@ -675,6 +947,26 @@
       exportJSON();
     } else if (action === 'import') {
       document.getElementById('file-import').click();
+    } else if (action === 'sync-on') {
+      openSyncDlg();
+    } else if (action === 'sync-off') {
+      if (!confirm('Wyłączyć synchronizację na TYM urządzeniu? Dane zostaną tu lokalnie. Inne urządzenia dalej będą zsynchronizowane.')) return;
+      syncInfo = { password: '', token: '' };
+      saveSync();
+      render();
+      toast('Synchronizacja wyłączona tutaj');
+    } else if (action === 'sync-now') {
+      toast('Odświeżam…');
+      try {
+        await cloudPull();
+        await cloudPush();
+        render();
+        toast('Zsynchronizowano');
+      } catch (e) {
+        lastSyncError = e.message || 'błąd';
+        render();
+        toast(lastSyncError);
+      }
     } else if (action === 'reload') {
       try {
         const regs = await navigator.serviceWorker.getRegistrations();
@@ -686,7 +978,7 @@
     } else if (action === 'reset') {
       if (!confirm('Na pewno usunąć WSZYSTKIE dane? Tej operacji nie da się cofnąć.')) return;
       if (!confirm('Ostatni raz: usunąć wszystko?')) return;
-      state = { version: VERSION, settings: { rate: rate() }, ruchy: [], praca: [] };
+      state = { version: VERSION, settings: { rate: rate() }, ruchy: [], praca: [], removed: {} };
       save(); render();
       toast('Dane wyczyszczone');
     }
@@ -737,4 +1029,5 @@
   }
 
   render();
+  startCloud();
 })();

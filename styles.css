@@ -133,6 +133,11 @@ main {
 
 .item.setting { cursor: default; }
 .item.setting:active { background: none; }
+.item.setting input.wide {
+  width: 100%;
+  max-width: 220px;
+  text-align: left;
+}
 .item.setting input {
   width: 90px;
   font: inherit;
