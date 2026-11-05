@@ -1,11 +1,13 @@
 /* Rozliczenia – prosta PWA, dane trzymane w localStorage telefonu.
  *
- * Model (wersja 3):
+ * Model (wersja 4):
  *   ruchy: [{ id, date, amount, currency, kind: 'in' | 'out', cel, note, poza }]
  *     kind 'in'  = szef dał pieniądze; cel mówi, co to było:
  *                  'wydatki' (kasa na wydatki) | 'wyplata' (moja wypłata) | 'pati' (dla Pati)
  *     kind 'out' = wydatek z kasy na wydatki; poza=true → zapłacone ze swojego (nie odejmuje)
  *   praca: [{ id, date, amount, note }]  – dni pracy Pati u Svena (zarobione €)
+ *   prace: [{ id, date, stawka, hours, amount, currency, note, paid, paidDate }]
+ *     dodatkowe roboty: stawka × godziny (albo sama stawka), później oznaczenie wypłaty
  *
  *   Zostało (Kasa) = suma in/wydatki − suma out (bez poza)
  */
@@ -14,7 +16,7 @@
 
   const STORAGE_KEY = 'rozliczenia.v1';
   const SYNC_KEY = 'rozliczenia.sync';
-  const VERSION = 3;
+  const VERSION = 4;
   const DEFAULT_RATE = 4.2; // ile zł za 1 € (1429 zł → 340,24 € w arkuszu)
   const GIST_ID = '0767aa98411befb5079087083df67a9e';
   const GIST_FILE = 'rozliczenia-sync.json';
@@ -45,6 +47,7 @@
       { id: 'p4', date: '2026-09-09', amount: 100, note: '' },
       { id: 'p5', date: '2026-10-07', amount: 100, note: '' },
     ],
+    prace: [],
   };
 
   // ---------- Stan ----------
@@ -58,8 +61,9 @@
     if (rawSync) syncInfo = JSON.parse(rawSync);
   } catch (e) { /* ignore */ }
   let state = load();
+  if (!Array.isArray(state.prace)) state.prace = [];
   let tab = 'kasa';
-  let monthFilter = { kasa: 'all', wyplata: 'all', pati: 'all' };
+  let monthFilter = { kasa: 'all', wyplata: 'all', prace: 'all', pati: 'all' };
 
   function load() {
     try {
@@ -79,19 +83,21 @@
     if (!p || typeof p !== 'object') return null;
     const rateVal = p.settings && p.settings.rate > 0 ? p.settings.rate : DEFAULT_RATE;
 
-    // v3 – aktualny
+    // v3/v4 – ruchy + praca Pati; v4 dodaje dodatkowe roboty
     if (Array.isArray(p.ruchy) && Array.isArray(p.praca) && p.version >= 3) {
+      p.version = VERSION;
       p.settings = { rate: rateVal };
+      p.prace = Array.isArray(p.prace) ? p.prace : [];
       return p;
     }
-    // v2 (ruchy z kategoriami rozchodów) → v3
+    // v2 (ruchy z kategoriami rozchodów) → v4
     if (Array.isArray(p.ruchy) && Array.isArray(p.praca)) {
-      return { version: VERSION, settings: { rate: rateVal }, ruchy: v2ToV3(p.ruchy), praca: p.praca };
+      return { version: VERSION, settings: { rate: rateVal }, ruchy: v2ToV3(p.ruchy), praca: p.praca, prace: [] };
     }
-    // v1 (szef / wyplata / pati) → v2 → v3
+    // v1 (szef / wyplata / pati) → v2 → v4
     if (Array.isArray(p.szef) && Array.isArray(p.pati)) {
       const v2 = v1ToV2(p);
-      return { version: VERSION, settings: { rate: rateVal }, ruchy: v2ToV3(v2.ruchy), praca: v2.praca };
+      return { version: VERSION, settings: { rate: rateVal }, ruchy: v2ToV3(v2.ruchy), praca: v2.praca, prace: [] };
     }
     return null;
   }
@@ -218,6 +224,7 @@
       settings: settings || { rate: DEFAULT_RATE },
       ruchy: mergeList(local.ruchy, remote.ruchy),
       praca: mergeList(local.praca, remote.praca),
+      prace: mergeList(local.prace, remote.prace),
       removed,
       updatedAt: Math.max(local.updatedAt || 0, remote.updatedAt || 0),
     };
@@ -228,6 +235,7 @@
       settings: s.settings,
       ruchy: s.ruchy,
       praca: s.praca,
+      prace: s.prace || [],
       removed: s.removed || {},
       updatedAt: s.updatedAt || Date.now(),
       gistToken: syncInfo.token || '',
@@ -383,6 +391,46 @@
     const paid = patiList().reduce((s, e) => s + (e.currency === 'PLN' ? plnToEur(+e.amount) : +e.amount), 0);
     return { earned, paid, due: earned - paid };
   }
+  function extraAmount(e) {
+    const stawka = +(e.stawka != null ? e.stawka : e.amount) || 0;
+    const hours = +e.hours || 0;
+    const total = hours > 0 ? stawka * hours : stawka;
+    return Math.round(total * 100) / 100;
+  }
+  function extraHoursLabel(h) {
+    if (!(h > 0)) return '';
+    const n = Math.round(+h * 100) / 100;
+    return String(n).replace('.', ',');
+  }
+  function extraRateLine(e) {
+    const cur = e.currency === 'PLN' ? 'PLN' : 'EUR';
+    const stawka = +(e.stawka != null ? e.stawka : e.amount) || 0;
+    const hours = +e.hours || 0;
+    if (hours > 0) return `${money(stawka, cur)}/h × ${extraHoursLabel(hours)} h`;
+    return `stawka ${money(stawka, cur)}`;
+  }
+  function saldoPrace() {
+    const earned = { EUR: 0, PLN: 0 };
+    const paid = { EUR: 0, PLN: 0 };
+    let waiting = 0;
+    for (const e of (state.prace || [])) {
+      const c = e.currency === 'PLN' ? 'PLN' : 'EUR';
+      const amt = extraAmount(e);
+      earned[c] += amt;
+      if (e.paid) paid[c] += amt;
+      else waiting += 1;
+    }
+    const due = { EUR: earned.EUR - paid.EUR, PLN: earned.PLN - paid.PLN };
+    return {
+      earned,
+      paid,
+      due,
+      waiting,
+      netDueEur: due.EUR + plnToEur(due.PLN),
+      netEarnedEur: earned.EUR + plnToEur(earned.PLN),
+      netPaidEur: paid.EUR + plnToEur(paid.PLN),
+    };
+  }
 
   // ---------- Renderowanie ----------
   const $view = document.getElementById('view');
@@ -394,6 +442,7 @@
     $fab.hidden = tab === 'wiecej';
     if (tab === 'kasa') renderKasa();
     else if (tab === 'wyplata') renderWyplata();
+    else if (tab === 'prace') renderPrace();
     else if (tab === 'pati') renderPati();
     else renderWiecej();
     $view.scrollTop = 0;
@@ -503,6 +552,42 @@
         <div class="note">${esc(e.note) || 'Wypłata'}<small>od szefa</small></div>
         ${amtHTML(e)}
       </button>`);
+    }
+    $view.innerHTML = html;
+  }
+
+  function renderPrace() {
+    $title.textContent = 'Dodatkowe prace';
+    const all = state.prace || [];
+    const s = saldoPrace();
+    const filtered = sortDesc(applyMonth(all, 'prace'));
+    const dueNeg = s.netDueEur < 0;
+    const dueCls = s.netDueEur > 0 ? 'pos' : (dueNeg ? 'neg' : '');
+    let html = `
+      <div class="cards single">
+        <div class="card">
+          <div class="label">${s.netDueEur > 0 ? 'Jeszcze mi wiszą' : (dueNeg ? 'Dostałem za dużo' : 'Wszystko wypłacone')}</div>
+          <div class="value ${dueCls}">${money(s.netDueEur, 'EUR')}</div>
+          <div class="sub">zarobione ${money(s.netEarnedEur, 'EUR')} · dostałem ${money(s.netPaidEur, 'EUR')}${s.waiting ? ` · czeka ${s.waiting}` : ''}<br>osobno od zwykłej wypłaty · kurs ${rateText()}</div>
+        </div>
+      </div>
+      ${monthChipsHTML(all, 'prace')}
+    `;
+    if (!filtered.length) {
+      html += `<div class="empty">Brak dodatkowych robót.<br>Dotknij <b>+</b>, zapisz kiedy była i za ile, a później odhacz, że dostałeś kasę.</div>`;
+    } else {
+      html += listByMonthHTML(filtered, (e) => {
+        const amt = extraAmount(e);
+        const rateLine = extraRateLine(e);
+        const sub = e.paid
+          ? `${rateLine} · dostałem ${e.paidDate ? fmtDate(e.paidDate) : ''}`
+          : `${rateLine} · czekam na kasę`;
+        return `<button class="item" data-edit="extra" data-id="${esc(e.id)}">
+          <div class="date"><b>${e.date.slice(8, 10)}</b>${MONTHS[+e.date.slice(5, 7) - 1]}</div>
+          <div class="note">${esc(e.note) || 'Dodatkowa robota'}<small>${esc(sub)}</small></div>
+          <div class="amt ${e.paid ? 'plus' : 'wait'}">${e.paid ? '+' : ''}${money(amt, e.currency)}</div>
+        </button>`;
+      });
     }
     $view.innerHTML = html;
   }
@@ -661,6 +746,14 @@
     for (const e of sortDesc(patiList()).reverse()) {
       lines.push(`  ${fmtDate(e.date)}  dostała  ${money(e.amount, e.currency)}${e.note ? '  ' + e.note : ''}`);
     }
+    lines.push('');
+    lines.push('DODATKOWE PRACE');
+    const x = saldoPrace();
+    lines.push(`Zarobione: ${money(x.netEarnedEur, 'EUR')}, dostałem: ${money(x.netPaidEur, 'EUR')}, jeszcze wiszą: ${money(x.netDueEur, 'EUR')}`);
+    for (const e of sortDesc(state.prace || []).reverse()) {
+      const status = e.paid ? `dostałem${e.paidDate ? ' ' + fmtDate(e.paidDate) : ''}` : 'czekam';
+      lines.push(`  ${fmtDate(e.date)}  ${extraRateLine(e)}  ${money(extraAmount(e), e.currency)}  ${status}${e.note ? '  ' + e.note : ''}`);
+    }
     return lines.join('\n');
   }
 
@@ -679,6 +772,8 @@
   const formRuch = document.getElementById('form-ruch');
   const dlgPraca = document.getElementById('dlg-praca');
   const formPraca = document.getElementById('form-praca');
+  const dlgExtra = document.getElementById('dlg-extra');
+  const formExtra = document.getElementById('form-extra');
   const dlgKasaWybor = document.getElementById('dlg-kasa-wybor');
   const dlgPatiWybor = document.getElementById('dlg-pati-wybor');
   const dlgSync = document.getElementById('dlg-sync');
@@ -734,6 +829,47 @@
     document.getElementById('dlg-praca-title').textContent = entry ? 'Edytuj dzień pracy' : 'Praca u Svena';
     document.getElementById('btn-praca-delete').hidden = !entry;
     dlgPraca.showModal();
+  }
+
+  function extraTotalFromForm() {
+    const stawka = parseFloat(String(formExtra.stawka.value).replace(',', '.'));
+    const hours = parseFloat(String(formExtra.hours.value).replace(',', '.'));
+    if (!(stawka >= 0)) return null;
+    const total = hours > 0 ? stawka * hours : stawka;
+    return { stawka, hours: hours > 0 ? hours : 0, total: Math.round(total * 100) / 100 };
+  }
+  function syncExtraForm() {
+    const paid = formExtra.paid.checked;
+    formExtra.classList.toggle('is-paid', paid);
+    if (paid && !formExtra.paidDate.value) formExtra.paidDate.value = todayISO();
+    const cur = formExtra.currency.value;
+    const t = extraTotalFromForm();
+    const $hint = document.getElementById('extra-total-hint');
+    if (!t) {
+      $hint.textContent = 'Zostaw godziny puste, jeśli stawka to cała kwota. Jak podasz godziny, apka policzy stawkę × godziny.';
+      return;
+    }
+    if (t.hours > 0) {
+      $hint.textContent = `${money(t.stawka, cur)}/h × ${extraHoursLabel(t.hours)} h = ${money(t.total, cur)}`;
+    } else {
+      $hint.textContent = `Do zapisania: ${money(t.total, cur)} (cała robota)`;
+    }
+  }
+  function openExtra(entry) {
+    formExtra.reset();
+    formExtra.id.value = entry ? entry.id : '';
+    formExtra.date.value = entry ? entry.date : todayISO();
+    formExtra.note.value = entry ? (entry.note || '') : '';
+    formExtra.stawka.value = entry ? (entry.stawka != null ? entry.stawka : entry.amount) : '';
+    formExtra.currency.value = entry ? (entry.currency || 'EUR') : 'EUR';
+    formExtra.hours.value = entry && entry.hours > 0 ? entry.hours : '';
+    formExtra.paid.checked = !!(entry && entry.paid);
+    formExtra.paidDate.value = entry && entry.paidDate ? entry.paidDate : '';
+    document.getElementById('dlg-extra-title').textContent = entry ? 'Edytuj robotę' : 'Dodatkowa robota';
+    document.getElementById('btn-extra-delete').hidden = !entry;
+    syncExtraForm();
+    dlgExtra.showModal();
+    if (!entry) setTimeout(() => formExtra.note.focus(), 50);
   }
 
   formRuch.addEventListener('change', (ev) => {
@@ -821,6 +957,32 @@
     }
   });
 
+  formExtra.addEventListener('change', syncExtraForm);
+  formExtra.addEventListener('input', (ev) => {
+    if (ev.target.name === 'stawka' || ev.target.name === 'hours' || ev.target.name === 'currency') syncExtraForm();
+  });
+  formExtra.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const t = extraTotalFromForm();
+    if (!t || !(t.total >= 0)) return;
+    const paid = formExtra.paid.checked;
+    const entry = {
+      id: formExtra.id.value || uid(),
+      date: formExtra.date.value,
+      stawka: t.stawka,
+      hours: t.hours,
+      amount: t.total,
+      currency: formExtra.currency.value,
+      note: formExtra.note.value.trim(),
+      paid,
+      paidDate: paid ? (formExtra.paidDate.value || todayISO()) : '',
+    };
+    if (!state.prace) state.prace = [];
+    upsert(state.prace, entry);
+    save(); dlgExtra.close(); render();
+    toast(paid ? 'Zapisano – kasa otrzymana' : 'Zapisano – czekam na kasę');
+  });
+
   formPraca.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const amount = parseFloat(String(formPraca.amount.value).replace(',', '.'));
@@ -848,11 +1010,17 @@
     save(); dlgPraca.close(); render();
     toast('Usunięto');
   });
+  document.getElementById('btn-extra-delete').addEventListener('click', () => {
+    if (!confirm('Usunąć tę robotę?')) return;
+    removeEntry('prace', formExtra.id.value);
+    save(); dlgExtra.close(); render();
+    toast('Usunięto');
+  });
 
   document.querySelectorAll('[data-close]').forEach((b) => {
     b.addEventListener('click', () => b.closest('dialog').close());
   });
-  [dlgRuch, dlgPraca, dlgKasaWybor, dlgPatiWybor, dlgSync].forEach((d) => {
+  [dlgRuch, dlgPraca, dlgExtra, dlgKasaWybor, dlgPatiWybor, dlgSync].forEach((d) => {
     d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
   });
   dlgKasaWybor.querySelectorAll('[data-kasa-add]').forEach((b) => {
@@ -889,6 +1057,7 @@
   $fab.addEventListener('click', () => {
     if (tab === 'kasa') dlgKasaWybor.showModal();
     else if (tab === 'wyplata') openRuch(null, { kind: 'in', cel: 'wyplata' });
+    else if (tab === 'prace') openExtra(null);
     else if (tab === 'pati') dlgPatiWybor.showModal();
   });
 
@@ -904,6 +1073,9 @@
       if (item.dataset.edit === 'ruch') {
         const entry = state.ruchy.find((e) => e.id === item.dataset.id);
         if (entry) openRuch(entry);
+      } else if (item.dataset.edit === 'extra') {
+        const entry = (state.prace || []).find((e) => e.id === item.dataset.id);
+        if (entry) openExtra(entry);
       } else {
         const entry = state.praca.find((e) => e.id === item.dataset.id);
         if (entry) openPraca(entry);
@@ -978,7 +1150,7 @@
     } else if (action === 'reset') {
       if (!confirm('Na pewno usunąć WSZYSTKIE dane? Tej operacji nie da się cofnąć.')) return;
       if (!confirm('Ostatni raz: usunąć wszystko?')) return;
-      state = { version: VERSION, settings: { rate: rate() }, ruchy: [], praca: [], removed: {} };
+      state = { version: VERSION, settings: { rate: rate() }, ruchy: [], praca: [], prace: [], removed: {} };
       save(); render();
       toast('Dane wyczyszczone');
     }
@@ -1003,7 +1175,7 @@
     try {
       const migrated = migrate(JSON.parse(await file.text()));
       if (!migrated) throw new Error('zły format');
-      if (!confirm(`Wczytać ${migrated.ruchy.length} wpisów i ${migrated.praca.length} dni pracy Pati? Obecne dane zostaną zastąpione.`)) return;
+      if (!confirm(`Wczytać ${migrated.ruchy.length} wpisów, ${migrated.praca.length} dni Pati i ${(migrated.prace || []).length} dodatkowych robót? Obecne dane zostaną zastąpione.`)) return;
       state = migrated;
       save(); render();
       toast('Dane wczytane');

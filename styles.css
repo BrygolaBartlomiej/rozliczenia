@@ -25,6 +25,7 @@
     --plus: #4ade80;
     --minus: #f87171;
   }
+  .amt.wait { color: #fb923c; }
 }
 
 * { box-sizing: border-box; }
@@ -214,6 +215,7 @@ main {
 }
 .amt.plus { color: var(--plus); }
 .amt.minus { color: var(--minus); }
+.amt.wait { color: #c2410c; }
 .amt.neutral { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(128,128,128,.5); }
 
 /* Karta podziału kasy */
@@ -295,18 +297,19 @@ main {
 }
 .tab {
   flex: 1;
+  min-width: 0;
   background: none;
   border: 0;
   color: var(--muted);
-  padding: 8px 0 6px;
+  padding: 8px 2px 6px;
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
 }
-.tab-icon { font-size: 22px; }
+.tab-icon { font-size: 20px; }
 .tab.active { color: var(--accent); font-weight: 600; }
 
 /* Dialogi */
@@ -353,6 +356,8 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
 .seg.cats span { font-size: 14px; padding: 8px 4px; }
 form.is-in .only-out { display: none; }
 form.is-out .only-in { display: none; }
+form:not(.is-paid) .only-paid { display: none; }
+.field small { font-weight: 400; color: var(--muted); }
 
 .check {
   display: flex;

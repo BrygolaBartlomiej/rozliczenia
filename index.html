@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=10">
+  <link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
   <header class="topbar">
@@ -30,6 +30,9 @@
     </button>
     <button class="tab" data-tab="wyplata">
       <span class="tab-icon">💰</span><span>Wypłata</span>
+    </button>
+    <button class="tab" data-tab="prace">
+      <span class="tab-icon">🛠️</span><span>Prace</span>
     </button>
     <button class="tab" data-tab="pati">
       <span class="tab-icon">👩‍🔧</span><span>Pati</span>
@@ -84,6 +87,54 @@
       </label>
       <div class="actions">
         <button type="button" class="btn danger" id="btn-ruch-delete" hidden>Usuń</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Anuluj</button>
+        <button type="submit" class="btn primary">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Formularz: dodatkowa robota -->
+  <dialog id="dlg-extra">
+    <form method="dialog" id="form-extra">
+      <h2 id="dlg-extra-title">Dodatkowa robota</h2>
+      <input type="hidden" name="id">
+      <label class="field">
+        <span>Kiedy była</span>
+        <input type="date" name="date" required>
+      </label>
+      <label class="field">
+        <span>Co to było</span>
+        <input type="text" name="note" placeholder="np. sobota u klienta, nadgodziny…" autocomplete="off">
+      </label>
+      <div class="row">
+        <label class="field grow">
+          <span>Stawka</span>
+          <input type="number" name="stawka" inputmode="decimal" step="0.01" min="0" placeholder="150" required>
+        </label>
+        <label class="field">
+          <span>Waluta</span>
+          <select name="currency">
+            <option value="EUR">€</option>
+            <option value="PLN">zł</option>
+          </select>
+        </label>
+      </div>
+      <label class="field">
+        <span>Godziny <small>(opcjonalnie)</small></span>
+        <input type="number" name="hours" inputmode="decimal" step="0.5" min="0" placeholder="puste = stawka za całość">
+      </label>
+      <p class="field-hint" id="extra-total-hint">Zostaw godziny puste, jeśli stawka to cała kwota. Jak podasz godziny, apka policzy stawkę × godziny.</p>
+      <label class="check">
+        <input type="checkbox" name="paid">
+        <span>Otrzymałem już za to pieniądze</span>
+      </label>
+      <label class="field only-paid">
+        <span>Kiedy dostałem kasę</span>
+        <input type="date" name="paidDate">
+      </label>
+      <div class="actions">
+        <button type="button" class="btn danger" id="btn-extra-delete" hidden>Usuń</button>
         <span class="grow"></span>
         <button type="button" class="btn" data-close>Anuluj</button>
         <button type="submit" class="btn primary">Zapisz</button>
@@ -178,6 +229,6 @@
   <input type="file" id="file-import" accept="application/json,.json" hidden>
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>
